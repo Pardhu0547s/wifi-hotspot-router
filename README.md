@@ -52,7 +52,7 @@ The script will:
 
 ## ⚙️ Configuration Options
 You can open the settings panel directly from Extension Manager to configure:
-- **SSID (Hotspot Name)**: Network name (defaults to `Fedora`).
+- **SSID (Hotspot Name)**: Network name (defaults to `hotspot`).
 - **Security Mode**: Enable or disable WPA2 password protection.
 - **Passphrase**: Set a WPA2 password.
 - **Max Connected Devices**: Limit the number of clients that can connect (set to 0 for unlimited).
