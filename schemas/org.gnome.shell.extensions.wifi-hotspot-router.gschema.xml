@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.wifi-hotspot-router" path="/org/gnome/shell/extensions/wifi-hotspot-router/">
+    <key name="hotspot-ssid" type="s">
+      <default>"Fedora"</default>
+      <summary>Hotspot SSID</summary>
+      <description>The name of the Wi-Fi hotspot network</description>
+    </key>
+    <key name="use-password" type="b">
+      <default>true</default>
+      <summary>Use Password</summary>
+      <description>Whether the hotspot requires a password</description>
+    </key>
+    <key name="hotspot-password" type="s">
+      <default>"12345678"</default>
+      <summary>Hotspot Password</summary>
+      <description>The WPA2 pre-shared key (password) for the hotspot</description>
+    </key>
+    <key name="max-clients" type="i">
+      <default>8</default>
+      <summary>Max Connected Devices</summary>
+      <description>The maximum number of connected devices allowed (set to 0 for unlimited)</description>
+    </key>
+  </schema>
+</schemalist>

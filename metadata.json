@@ -1,0 +1,10 @@
+{
+  "name": "Advanced Wi-Fi Hotspot Router",
+  "description": "Native quick settings toggle to run dual-mode Wi-Fi hotspot sharing without losing active connection.",
+  "uuid": "wifi-hotspot-router@pavan.github.com",
+  "shell-version": [
+    "45", "46", "47", "48", "49", "50"
+  ],
+  "url": "https://github.com/pavan/wifi-hotspot-router",
+  "settings-schema": "org.gnome.shell.extensions.wifi-hotspot-router"
+}

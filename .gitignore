@@ -1,0 +1,13 @@
+# Local compiled schema
+schemas/gschemas.compiled
+
+# Packed zip files for submission
+*.zip
+
+# System/IDE files
+.DS_Store
+.vscode/
+.idea/
+*~
+*.swp
+*.log
