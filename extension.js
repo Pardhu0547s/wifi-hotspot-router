@@ -30,7 +30,7 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
     _executeToggleState(shouldActivate) {
         if (shouldActivate) {
-            let ssid = this._settings.get_string('hotspot-ssid') || 'Fedora';
+            let ssid = this._settings.get_string('hotspot-ssid') || 'hotspot';
             let usePassword = this._settings.get_boolean('use-password');
             let password = usePassword ? (this._settings.get_string('hotspot-password') || '12345678') : 'NONE';
             let maxClients = this._settings.get_int('max-clients').toString();

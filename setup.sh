@@ -38,11 +38,11 @@ echo "[+] Creating /usr/local/bin/start_hotspot..."
 sudo tee /usr/local/bin/start_hotspot > /dev/null <<'EOF'
 #!/bin/bash
 # Arguments:
-# $1: SSID (default: Fedora)
+# $1: SSID (default: hotspot)
 # $2: Password (default: 12345678, or "NONE" for no password)
 # $3: Max Clients (default: 8, or "0" for unlimited)
 
-SSID="${1:-Fedora}"
+SSID="${1:-hotspot}"
 PASSWORD="${2:-12345678}"
 MAX_CLIENTS="${3:-8}"
 

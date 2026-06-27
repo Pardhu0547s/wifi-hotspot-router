@@ -2,7 +2,7 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.wifi-hotspot-router" path="/org/gnome/shell/extensions/wifi-hotspot-router/">
     <key name="hotspot-ssid" type="s">
-      <default>"Fedora"</default>
+      <default>"hotspot"</default>
       <summary>Hotspot SSID</summary>
       <description>The name of the Wi-Fi hotspot network</description>
     </key>
