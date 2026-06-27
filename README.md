@@ -44,7 +44,7 @@ The script will:
 1. **Restart GNOME Shell**: Since Fedora uses Wayland by default, log out of your session and log back in.
 2. **Enable the Extension**:
    ```bash
-   gnome-extensions enable wifi-hotspot-router@pavan.github.com
+   gnome-extensions enable wifi-hotspot-router@pardhu0547s.github.com
    ```
 3. Open GNOME **Extension Manager**, click the gear icon (⚙️) next to the extension, and configure your settings!
 

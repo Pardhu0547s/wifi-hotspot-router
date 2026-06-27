@@ -4,7 +4,7 @@
 set -e
 
 # Configuration constraints
-UUID="wifi-hotspot-router@pavan.github.com"
+UUID="wifi-hotspot-router@pardhu0547s.github.com"
 TARGET_DIR="$HOME/.local/share/gnome-shell/extensions/$UUID"
 SOURCE_DIR="/home/pavan/WorkSpace/WIFI-HOTSPOT"
 
