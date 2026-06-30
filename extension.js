@@ -20,7 +20,7 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
         // User action listener
         this.connect('clicked', () => {
-            this._executeToggleState(this.checked);
+            this._handleToggleEvent(this.checked);
         });
 
         // Initialize state right away and start the polling state machine
@@ -28,56 +28,77 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
         this._startPollingLoop();
     }
 
-    _executeToggleState(shouldActivate) {
-        if (shouldActivate) {
-            let ssid = this._settings.get_string('hotspot-ssid') || 'hotspot';
-            let usePassword = this._settings.get_boolean('use-password');
-            let password = usePassword ? (this._settings.get_string('hotspot-password') || '12345678') : 'NONE';
-            let maxClients = this._settings.get_int('max-clients').toString();
+    _handleToggleEvent(shouldActivate) {
+        if (!shouldActivate) {
+            this._runCommand(['nmcli', 'connection', 'down', 'Hotspot']);
+            return;
+        }
 
-            let args = ['sudo', '/usr/local/bin/start_hotspot', ssid, password, maxClients];
-            try {
-                let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.NONE);
-                proc.wait_async(null, null);
-            } catch (e) {
-                console.error(`[HotspotRouter] Failed executing start: ${e.message}`);
-            }
+        let ssid = this._settings.get_string('hotspot-ssid') || 'hotspot';
+        let secureMode = this._settings.get_boolean('use-password');
+        let clientLimit = this._settings.get_int('max-clients');
+
+        // Modify parameters natively without using 'sudo'
+        this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot', 
+            '802-11-wireless.ssid', ssid,
+            '802-11-wireless.max-clients', clientLimit.toString()
+        ]);
+
+        if (secureMode) {
+            this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot',
+                '802-11-wireless-security.key-mgmt', 'wpa-psk'
+            ]);
         } else {
-            let args = ['sudo', '/usr/local/bin/stop_hotspot'];
-            try {
-                let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.NONE);
-                proc.wait_async(null, null);
-            } catch (e) {
-                console.error(`[HotspotRouter] Failed executing stop: ${e.message}`);
-            }
+            this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot',
+                '802-11-wireless-security.key-mgmt', 'none'
+            ]);
+        }
+
+        this._runCommand(['nmcli', 'connection', 'up', 'Hotspot']);
+    }
+
+    _runCommand(args) {
+        try {
+            let proc = new Gio.Subprocess({ argv: args, flags: Gio.SubprocessFlags.NONE });
+            proc.init(null);
+            proc.wait_async(null, null);
+        } catch (e) {
+            console.error(`[HotspotRouter] Failed executing command: ${e.message}`);
         }
     }
 
     _checkHotspotActiveState() {
         try {
-            // Asynchronously check if the virtual interface ap0 exists
-            let proc = Gio.Subprocess.new(
-                ['ip', 'link', 'show', 'ap0'],
-                Gio.SubprocessFlags.STDOUT_PIPE
-            );
-            
+            let proc = new Gio.Subprocess({
+                argv: ['nmcli', '-g', 'NAME,ACTIVE', 'connection', 'show', '--active'],
+                flags: Gio.SubprocessFlags.STDOUT_PIPE
+            });
+            proc.init(null);
             proc.communicate_utf8_async(null, null, (obj, res) => {
                 try {
-                    let [success, stdout, stderr] = obj.communicate_utf8_finish(res);
-                    let isActive = success && stdout && stdout.includes('ap0');
-                    if (this.checked !== isActive) {
-                        this.checked = isActive;
+                    let [success, stdout] = obj.communicate_utf8_finish(res);
+                    if (success && stdout) {
+                        let active = stdout.split('\n').some(l => l.startsWith('Hotspot:yes'));
+                        if (this.checked !== active) {
+                            this.checked = active;
+                        }
                     }
                 } catch (err) {
                     // Fail silently during background state polling updates
                 }
             });
         } catch (e) {
-            // Fail silently if process initialization hits an unexpected barrier
+            // Fail silently
         }
     }
 
     _startPollingLoop() {
+        // Fix: Safely clear any pre-existing timeout source before allocating a new one
+        if (this._timeoutId > 0) {
+            GLib.Source.remove(this._timeoutId);
+            this._timeoutId = 0;
+        }
+
         this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
             this._checkHotspotActiveState();
             return GLib.SOURCE_CONTINUE; // Keeps the loop alive
