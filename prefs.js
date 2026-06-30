@@ -53,15 +53,25 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
         cryptoToggleRow.bind_property('active', passwordRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
 
-        // 4. Client Constraint Row
-        const maxClientsAdjustment = Gtk.Adjustment.new(
-            settings.get_int('max-clients'), 1, 32, 1, 5, 0
-        );
+        // 4. Client Constraint Row (Manually bound to prevent GVariant float vs integer crash)
+        const maxClientsAdjustment = new Gtk.Adjustment({
+            lower: 1,
+            upper: 32,
+            step_increment: 1,
+            page_increment: 5,
+            value: settings.get_int('max-clients')
+        });
         const clientLimitRow = new Adw.SpinRow({
             title: 'Maximum Connected Hardware Stations (Client Limit)',
             adjustment: maxClientsAdjustment
         });
-        settings.bind('max-clients', clientLimitRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        
+        // Save the setting whenever the spin button value changes
+        maxClientsAdjustment.connect('value-changed', () => {
+            let val = Math.round(maxClientsAdjustment.value);
+            settings.set_int('max-clients', val);
+        });
+
         group.add(clientLimitRow);
     }
 
