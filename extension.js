@@ -15,7 +15,6 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
         });
 
         this._extension = extension;
-        this._settings = extension.getSettings();
         this._timeoutId = 0;
 
         // User action listener
@@ -29,32 +28,12 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
     }
 
     _handleToggleEvent(shouldActivate) {
-        if (!shouldActivate) {
-            this._runCommand(['nmcli', 'connection', 'down', 'Hotspot']);
-            return;
-        }
-
-        let ssid = this._settings.get_string('hotspot-ssid') || 'hotspot';
-        let secureMode = this._settings.get_boolean('use-password');
-        let clientLimit = this._settings.get_int('max-clients');
-
-        // Modify parameters natively without using 'sudo'
-        this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot', 
-            '802-11-wireless.ssid', ssid,
-            '802-11-wireless.max-clients', clientLimit.toString()
-        ]);
-
-        if (secureMode) {
-            this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot',
-                '802-11-wireless-security.key-mgmt', 'wpa-psk'
-            ]);
-        } else {
-            this._runCommand(['nmcli', 'connection', 'modify', 'Hotspot',
-                '802-11-wireless-security.key-mgmt', 'none'
-            ]);
-        }
-
-        this._runCommand(['nmcli', 'connection', 'up', 'Hotspot']);
+        let username = GLib.get_user_name();
+        let serviceName = `wifi-hotspot@${username}.service`;
+        let args = shouldActivate 
+            ? ['systemctl', 'start', serviceName] 
+            : ['systemctl', 'stop', serviceName];
+        this._runCommand(args);
     }
 
     _runCommand(args) {
@@ -69,19 +48,18 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
     _checkHotspotActiveState() {
         try {
+            // Check if the virtual interface ap0 created by create_ap exists
             let proc = new Gio.Subprocess({
-                argv: ['nmcli', '-g', 'NAME,ACTIVE', 'connection', 'show', '--active'],
+                argv: ['ip', 'link', 'show', 'ap0'],
                 flags: Gio.SubprocessFlags.STDOUT_PIPE
             });
             proc.init(null);
             proc.communicate_utf8_async(null, null, (obj, res) => {
                 try {
                     let [success, stdout] = obj.communicate_utf8_finish(res);
-                    if (success && stdout) {
-                        let active = stdout.split('\n').some(l => l.startsWith('Hotspot:yes'));
-                        if (this.checked !== active) {
-                            this.checked = active;
-                        }
+                    let active = success && stdout && stdout.includes('ap0');
+                    if (this.checked !== active) {
+                        this.checked = active;
                     }
                 } catch (err) {
                     // Fail silently during background state polling updates

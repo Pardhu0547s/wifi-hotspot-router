@@ -6,6 +6,10 @@
     "45", "46", "47", "48", "49", "50"
   ],
   "url": "https://github.com/Pardhu0547s/wifi-hotspot-router.git",
-  "donations": "https://github.com/Pardhu0547s/wifi-hotspot-router",
+  "version-name": "1.0",
+  "donations": {
+    "github": "Pardhu0547s",
+    "custom": "https://github.com/Pardhu0547s/wifi-hotspot-router"
+  },
   "settings-schema": "org.gnome.shell.extensions.wifi-hotspot-router"
 }

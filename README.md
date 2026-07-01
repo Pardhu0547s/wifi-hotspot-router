@@ -2,14 +2,14 @@
 
 A premium GNOME Shell Quick Settings toggle to run a simultaneous Wi-Fi hotspot in Linux without losing your active internet/Wi-Fi connection.
 
-![GNOME Quick Settings Toggle](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot.png) *(Placeholder URL for screenshot)*
+![GNOME Quick Settings Toggle](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot.png)
 
 ## 📡 The Problem & Solution
 Standard NetworkManager configurations typically treat your wireless interface as either a client (connecting to the internet) or an Access Point (broadcasting a hotspot). Toggling one disables the other.
 
 This extension resolves this by executing `create_ap` (which creates a virtual interface `ap0` under the hood) on the exact same frequency channel as your primary internet interface.
 
-To bypass password prompts on every toggle, a minor passwordless sudoers rule is created for two specific starting and stopping wrappers, giving you a smooth, zero-friction toggle switch in your panel.
+To bypass password prompts and maintain review-compliancy guidelines for the GNOME Extensions store, a passwordless systemd service template and custom Polkit rules are deployed. This gives you a smooth, zero-friction toggle switch directly in your panel without requiring any `sudo` inside the Javascript extension layer.
 
 ---
 
@@ -35,9 +35,10 @@ chmod +x setup.sh
 
 The script will:
 - Compile GSettings schemas locally.
-- Securely patch `/usr/bin/create_ap` to support connected client limits.
+- Restore and securely patch `/usr/bin/create_ap` to support connected client limits.
 - Install `/usr/local/bin/start_hotspot` and `/usr/local/bin/stop_hotspot`.
-- Install passwordless sudo rules inside `/etc/sudoers.d/hotspot` for these two scripts.
+- Deploy the systemd service template `/etc/systemd/system/wifi-hotspot@.service`.
+- Install custom Polkit rules `/etc/polkit-1/rules.d/99-wifi-hotspot.rules` to authorize starts and stops without password prompts.
 - Deploy the extension symlink to your GNOME Shell extensions directory.
 
 ### 3. Activating
@@ -46,16 +47,18 @@ The script will:
    ```bash
    gnome-extensions enable wifi-hotspot-router@pardhu0547s.github.com
    ```
-3. Open GNOME **Extension Manager**, click the gear icon (⚙️) next to the extension, and configure your settings!
+3. Open GNOME **Extensions** or GNOME **Extension Manager**, click the gear icon (⚙️) next to the extension, and configure your settings!
 
 ---
 
 ## ⚙️ Configuration Options
-You can open the settings panel directly from Extension Manager to configure:
+You can open the settings panel to configure:
 - **SSID (Hotspot Name)**: Network name (defaults to `hotspot`).
 - **Security Mode**: Enable or disable WPA2 password protection.
-- **Passphrase**: Set a WPA2 password.
-- **Max Connected Devices**: Limit the number of clients that can connect (set to 0 for unlimited).
+- **Passphrase**: Set a WPA2 password (stored securely in `~/.config/wifi-hotspot.conf` with `600` permissions).
+- **Max Connected Devices**: Limit the number of clients that can connect.
+
+![Hotspot Settings Panel](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot-settings.png)
 
 ---
 
