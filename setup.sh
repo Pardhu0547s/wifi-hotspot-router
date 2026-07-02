@@ -130,7 +130,16 @@ polkit.addRule(function(action, subject, context) {
 EOF
 echo "[+] Polkit rules installed."
 
-echo -e "\n=== Phase 6: Deploying GNOME Extension ==="
+echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
+# Tell NetworkManager to ignore wlo1_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
+sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<'EOF'
+[keyfile]
+unmanaged-devices=interface-name:wlo1_ap;interface-name:ap0;interface-name:ap1
+EOF
+sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager || true
+echo "[+] NetworkManager configured to hide virtual interfaces from GUI."
+
+echo -e "\n=== Phase 7: Deploying GNOME Extension ==="
 mkdir -p "$HOME/.local/share/gnome-shell/extensions"
 if [ -L "$TARGET_DIR" ] || [ -d "$TARGET_DIR" ]; then
     rm -rf "$TARGET_DIR"
@@ -138,7 +147,7 @@ fi
 ln -s "$SOURCE_DIR" "$TARGET_DIR"
 echo "[+] Symlink successfully pointing to development workspace directory."
 
-echo -e "\n=== Phase 7: Initialization ==="
+echo -e "\n=== Phase 8: Initialization ==="
 # Initialize a default configuration file if not exists
 CONFIG_DEST="$HOME/.config/wifi-hotspot.conf"
 if [ ! -f "$CONFIG_DEST" ]; then
@@ -152,7 +161,7 @@ EOF
     chmod 600 "$CONFIG_DEST"
 fi
 
-echo -e "\n=== Phase 8: Activation Guidelines ==="
+echo -e "\n=== Phase 9: Activation Guidelines ==="
 echo "Please restart GNOME Shell (log out and back in) to apply the changes."
 echo "Then enable the extension:"
 echo "    gnome-extensions enable $UUID"
