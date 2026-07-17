@@ -88,7 +88,13 @@ elif [ "$WIFI_BAND" = "2.4" ]; then
     CMD_ARGS+=(--freq-band 2.4)
 fi
 
-CMD_ARGS+=(--dhcp-dns 8.8.8.8 wlo1 wlo1 "$SSID")
+# Dynamically detect active internet interface (default gateway route)
+INTERNET_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
+if [ -z "$INTERNET_IFACE" ]; then
+    INTERNET_IFACE="wlo1"
+fi
+
+CMD_ARGS+=(--dhcp-dns 8.8.8.8 wlo1 "$INTERNET_IFACE" "$SSID")
 
 if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
     CMD_ARGS+=("$PASSWORD")
