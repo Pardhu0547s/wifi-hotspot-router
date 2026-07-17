@@ -65,17 +65,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         group.add(clientLimitRow);
 
-        // 5. Wi-Fi Band Selection Row
-        let stringList = Gtk.StringList.new(['Auto (Recommended)', '2.4 GHz Only', '5 GHz Only']);
-        const bandRow = new Adw.ComboRow({
-            title: 'Wi-Fi Band Selection',
-            model: stringList
-        });
-        let initialBandIndex = 0;
-        if (config.wifiBand === '2.4') initialBandIndex = 1;
-        else if (config.wifiBand === '5') initialBandIndex = 2;
-        bandRow.selected = initialBandIndex;
-        group.add(bandRow);
 
         // 6. Support / Donations Row
         const donationsRow = new Adw.ActionRow({
@@ -96,9 +85,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
-            let bandVal = 'auto';
-            if (bandRow.selected === 1) bandVal = '2.4';
-            else if (bandRow.selected === 2) bandVal = '5';
             
             // Password validation indicator (WPA2-PSK requires at least 8 characters)
             let passValid = !usePass || (pass.length >= 8);
@@ -108,10 +94,9 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             settings.set_string('hotspot-ssid', ssid);
             settings.set_boolean('use-password', usePass);
             settings.set_int('max-clients', maxCl);
-            settings.set_string('wifi-band', bandVal);
             
             // Save to secure config file
-            this._saveConfig(ssid, usePass, pass, maxCl, bandVal);
+            this._saveConfig(ssid, usePass, pass, maxCl);
         };
 
         // Listen for changes
@@ -119,7 +104,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         cryptoToggleRow.connect('notify::active', triggerSave);
         passwordRow.connect('changed', triggerSave);
         maxClientsAdjustment.connect('value-changed', triggerSave);
-        bandRow.connect('notify::selected', triggerSave);
 
         // Initial validation run on load
         triggerSave();
@@ -131,8 +115,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             ssid: 'hotspot',
             usePassword: true,
             password: '',
-            maxClients: 10,
-            wifiBand: 'auto'
+            maxClients: 10
         };
 
         if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
@@ -149,7 +132,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                             else if (key === 'USE_PASSWORD') config.usePassword = (value === 'true');
                             else if (key === 'PASSWORD') config.password = value;
                             else if (key === 'MAX_CLIENTS') config.maxClients = parseInt(value, 10) || 10;
-                            else if (key === 'WIFI_BAND') config.wifiBand = value;
                         }
                     }
                 }
@@ -160,13 +142,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         return config;
     }
 
-    _saveConfig(ssid, usePassword, password, maxClients, wifiBand) {
+    _saveConfig(ssid, usePassword, password, maxClients) {
         let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 USE_PASSWORD="${usePassword}"
 PASSWORD="${password}"
 MAX_CLIENTS="${maxClients}"
-WIFI_BAND="${wifiBand}"
 `;
         try {
             GLib.file_set_contents(path, output);

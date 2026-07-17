@@ -54,7 +54,6 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="none"
 MAX_CLIENTS="10"
-WIFI_BAND="auto"
 
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
@@ -94,12 +93,6 @@ CMD_ARGS+=(--ieee80211n --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][
 
 # Use channel 6 (least congested non-overlapping 2.4GHz channel)
 CMD_ARGS+=(-c 6)
-
-if [ "$WIFI_BAND" = "5" ]; then
-    CMD_ARGS+=(--freq-band 5)
-elif [ "$WIFI_BAND" = "2.4" ]; then
-    CMD_ARGS+=(--freq-band 2.4)
-fi
 
 # Dynamically detect active internet interface (default gateway route)
 INTERNET_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
@@ -187,7 +180,6 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="12345678"
 MAX_CLIENTS="10"
-WIFI_BAND="auto"
 EOF
     chmod 600 "$CONFIG_DEST"
 fi

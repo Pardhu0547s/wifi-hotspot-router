@@ -13,9 +13,5 @@
       <default>10</default>
       <summary>Maximum Client Connections Limit</summary>
     </key>
-    <key name="wifi-band" type="s">
-      <default>'auto'</default>
-      <summary>Wi-Fi Band Selection (auto, 2.4, 5)</summary>
-    </key>
   </schema>
 </schemalist>
