@@ -23,10 +23,12 @@ The extension relies on `linux-wifi-hotspot` (`create_ap`). Install it along wit
 sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel
 
 # Ubuntu / Debian
-sudo apt install -y libgtk-3-dev build-essential gcc pkg-config qrencode
+sudo add-apt-repository ppa:lakinduakash/lwh
+sudo apt update
+sudo apt install -y linux-wifi-hotspot
 
 # Arch Linux
-sudo pacman -S gtk3 pkgconf qrencode
+sudo pacman -S gtk3 pkgconf qrencode linux-wifi-hotspot
 
 # Then install/build linux-wifi-hotspot from: https://github.com/lakinduakash/linux-wifi-hotspot
 # (On Arch Linux, you can simply install `linux-wifi-hotspot` from the AUR)
