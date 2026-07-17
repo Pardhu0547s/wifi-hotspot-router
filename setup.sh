@@ -54,6 +54,7 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="none"
 MAX_CLIENTS="10"
+WIFI_BAND="auto"
 
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
@@ -69,7 +70,7 @@ fi
 /usr/bin/systemctl stop systemd-resolved 2>/dev/null || true
 /usr/bin/fuser -k 53/udp 53/tcp 67/udp 2>/dev/null || true
 
-# Step 2: Stop Fedora's firewall from blocking DHCP/DNS traffic
+# Step-2: Stop Fedora's firewall from blocking DHCP/DNS traffic
 /usr/bin/systemctl stop firewalld 2>/dev/null || true
 
 # Step 3: Setup Max Clients in environment if not zero/unlimited
@@ -80,11 +81,20 @@ else
 fi
 
 # Step 4: Launch Hotspot with native NAT and auto-DHCP
-if [ "$USE_PASSWORD" = "false" ] || [ "$PASSWORD" = "none" ] || [ -z "$PASSWORD" ]; then
-    /usr/bin/create_ap -c 2 --dhcp-dns 8.8.8.8 wlo1 wlo1 "$SSID"
-else
-    /usr/bin/create_ap -c 2 --dhcp-dns 8.8.8.8 wlo1 wlo1 "$SSID" "$PASSWORD"
+CMD_ARGS=()
+if [ "$WIFI_BAND" = "5" ]; then
+    CMD_ARGS+=(--freq-band 5)
+elif [ "$WIFI_BAND" = "2.4" ]; then
+    CMD_ARGS+=(--freq-band 2.4)
 fi
+
+CMD_ARGS+=(--dhcp-dns 8.8.8.8 wlo1 wlo1 "$SSID")
+
+if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
+    CMD_ARGS+=("$PASSWORD")
+fi
+
+/usr/bin/create_ap "${CMD_ARGS[@]}"
 EOF
 sudo chmod +x /usr/local/bin/start_hotspot
 
@@ -157,6 +167,7 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="12345678"
 MAX_CLIENTS="10"
+WIFI_BAND="auto"
 EOF
     chmod 600 "$CONFIG_DEST"
 fi
