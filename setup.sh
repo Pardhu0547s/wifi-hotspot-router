@@ -6,7 +6,7 @@ set -e
 # Configuration constraints
 UUID="wifi-hotspot-router@pardhu0547s.github.com"
 TARGET_DIR="$HOME/.local/share/gnome-shell/extensions/$UUID"
-SOURCE_DIR="/home/pavan/WorkSpace/WIFI-HOTSPOT"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_NAME=$(whoami)
 
 echo "=== Phase 1: Compiling GSettings Schemas ==="
