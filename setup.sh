@@ -188,8 +188,8 @@ elif [ "$ACTION" = "block" ]; then
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1
-        /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
-    fi
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1    fi
+
     # iptables firewall block
     /usr/sbin/iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
         /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
@@ -197,6 +197,10 @@ elif [ "$ACTION" = "block" ]; then
     if [ -n "$IFACE" ]; then
         /usr/sbin/iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
     fi
+ # Robust iptables blocking
+    /usr/sbin/iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+
 elif [ "$ACTION" = "unblock" ]; then
     if [ -f "$DENY_FILE" ]; then
         sed -i "/$MAC/Id" "$DENY_FILE"
@@ -208,6 +212,8 @@ elif [ "$ACTION" = "unblock" ]; then
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1
     fi
+
+    /usr/sbin/iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
     /usr/sbin/iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
