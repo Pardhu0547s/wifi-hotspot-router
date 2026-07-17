@@ -205,9 +205,6 @@ class HotspotRouterIndicator extends QuickSettings.SystemIndicator {
         
         // Add to quick settings items
         this.quickSettingsItems.push(this._toggle);
-        
-        // Add its menu to the indicator
-        this.menu.addMenuItem(this._toggle.menu);
     }
 
     destroy() {
