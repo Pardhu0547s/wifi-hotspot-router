@@ -64,6 +64,7 @@ fi
 /usr/bin/create_ap --stop wlo1 2>/dev/null || true
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
+/usr/sbin/iw dev wlo1_ap del 2>/dev/null || true
 
 # Step 1: Clear out local DNS system conflicts completely
 /usr/bin/systemctl stop dnsmasq 2>/dev/null || true
@@ -82,6 +83,10 @@ fi
 
 # Step 4: Launch Hotspot with native NAT and auto-DHCP
 CMD_ARGS=()
+
+# Enable 802.11n High Throughput mode with 40MHz channel width for maximum speed
+CMD_ARGS+=(--ieee80211n --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC][DSSS_CCK-40]')
+
 if [ "$WIFI_BAND" = "5" ]; then
     CMD_ARGS+=(--freq-band 5)
 elif [ "$WIFI_BAND" = "2.4" ]; then
@@ -94,7 +99,7 @@ if [ -z "$INTERNET_IFACE" ]; then
     INTERNET_IFACE="wlo1"
 fi
 
-CMD_ARGS+=(--dhcp-dns 8.8.8.8)
+CMD_ARGS+=(--dhcp-dns 1.1.1.1,8.8.8.8)
 CMD_ARGS+=("wlo1" "$INTERNET_IFACE" "$SSID")
 
 if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
