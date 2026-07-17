@@ -179,6 +179,28 @@ elif [ "$ACTION" = "list_blocked" ]; then
 fi
 EOF
 sudo chmod +x /usr/local/bin/manage_hotspot_clients
+
+# hostapd_action.sh - forcefully kicks blocked devices upon connection
+sudo tee /usr/local/bin/hostapd_action.sh > /dev/null <<'EOF'
+#!/bin/bash
+IFACE=$1
+EVENT=$2
+MAC=$3
+
+if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
+    for DENY_FILE in /home/*/.config/wifi-hotspot.deny; do
+        if [ -f "$DENY_FILE" ]; then
+            if grep -q -i "$MAC" "$DENY_FILE"; then
+                CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
+                /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
+                /usr/sbin/iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
+            fi
+        fi
+    done
+fi
+EOF
+sudo chmod +x /usr/local/bin/hostapd_action.sh
+
 echo "[+] Helper scripts installed."
 
 echo -e "\n=== Phase 4: Installing systemd Service Template ==="
@@ -190,6 +212,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/start_hotspot %i
+ExecStartPost=/bin/bash -c 'sleep 3; /usr/bin/hostapd_cli -p $(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1) -B -a /usr/local/bin/hostapd_action.sh || true'
 ExecStop=/usr/local/bin/stop_hotspot %i
 RemainAfterExit=yes
 

@@ -21,7 +21,15 @@ The extension relies on `linux-wifi-hotspot` (`create_ap`). Install it along wit
 ```bash
 # Fedora
 sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel
+
+# Ubuntu / Debian
+sudo apt install -y libgtk-3-dev build-essential gcc pkg-config qrencode
+
+# Arch Linux
+sudo pacman -S gtk3 pkgconf qrencode
+
 # Then install/build linux-wifi-hotspot from: https://github.com/lakinduakash/linux-wifi-hotspot
+# (On Arch Linux, you can simply install `linux-wifi-hotspot` from the AUR)
 ```
 
 ### 2. Running Setup
