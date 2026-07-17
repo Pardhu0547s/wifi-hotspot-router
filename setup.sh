@@ -94,7 +94,8 @@ if [ -z "$INTERNET_IFACE" ]; then
     INTERNET_IFACE="wlo1"
 fi
 
-CMD_ARGS+=(--dhcp-dns 8.8.8.8 wlo1 "$INTERNET_IFACE" "$SSID")
+CMD_ARGS+=(--dhcp-dns 8.8.8.8)
+CMD_ARGS+=("wlo1" "$INTERNET_IFACE" "$SSID")
 
 if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
     CMD_ARGS+=("$PASSWORD")
