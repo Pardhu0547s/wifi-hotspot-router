@@ -1,12 +1,14 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 
 const HotspotRouterToggle = GObject.registerClass(
-class HotspotRouterToggle extends QuickSettings.QuickToggle {
+class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
     _init(extension) {
         super._init({
             title: 'Hotspot',
@@ -16,8 +18,21 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
         this._extension = extension;
         this._timeoutId = 0;
+        
+        // Setup Menu Header
+        this.menu.setHeader('network-wireless-hotspot-symbolic', 'Hotspot Devices', 'Manage connected clients');
 
-        // User action listener
+        // Connected Devices Section
+        this._connectedSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._connectedSection);
+        
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        
+        // Blocked Devices Section
+        this._blockedSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._blockedSection);
+
+        // User action listener for the main toggle
         this.connect('clicked', () => {
             this._handleToggleEvent(this.checked);
         });
@@ -25,6 +40,13 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
         // Initialize state right away and start the polling state machine
         this._checkHotspotActiveState();
         this._startPollingLoop();
+        
+        // Update menu when opened
+        this.menu.connect('open-state-changed', (menu, isOpen) => {
+            if (isOpen) {
+                this._updateDeviceLists();
+            }
+        });
     }
 
     _handleToggleEvent(shouldActivate) {
@@ -36,11 +58,23 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
         this._runCommand(args);
     }
 
-    _runCommand(args) {
+    _runCommand(args, callback = null) {
         try {
-            let proc = new Gio.Subprocess({ argv: args, flags: Gio.SubprocessFlags.NONE });
+            let proc = new Gio.Subprocess({ 
+                argv: args, 
+                flags: callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE 
+            });
             proc.init(null);
-            proc.wait_async(null, null);
+            if (callback) {
+                proc.communicate_utf8_async(null, null, (obj, res) => {
+                    try {
+                        let [success, stdout] = obj.communicate_utf8_finish(res);
+                        callback(success, stdout);
+                    } catch (err) {}
+                });
+            } else {
+                proc.wait_async(null, null);
+            }
         } catch (e) {
             console.error(`[HotspotRouter] Failed executing command: ${e.message}`);
         }
@@ -48,7 +82,6 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
     _checkHotspotActiveState() {
         try {
-            // Check if the wifi-hotspot systemd service is active
             let username = GLib.get_user_name();
             let proc = new Gio.Subprocess({
                 argv: ['systemctl', 'is-active', `wifi-hotspot@${username}.service`],
@@ -62,17 +95,82 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
                     if (this.checked !== active) {
                         this.checked = active;
                     }
-                } catch (err) {
-                    // Fail silently during background state polling updates
-                }
+                } catch (err) {}
             });
-        } catch (e) {
-            // Fail silently
-        }
+        } catch (e) {}
+    }
+
+    _updateDeviceLists() {
+        let username = GLib.get_user_name();
+        
+        // Fetch Connected Clients
+        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
+            this._connectedSection.removeAll();
+            
+            let header = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
+            header.label.add_style_class_name('bold');
+            this._connectedSection.addMenuItem(header);
+            
+            if (success && stdout && stdout.trim()) {
+                let macs = stdout.trim().split('\n');
+                for (let mac of macs) {
+                    if (!mac) continue;
+                    let item = new PopupMenu.PopupMenuItem(mac);
+                    
+                    let blockBtn = new St.Button({
+                        style_class: 'button',
+                        child: new St.Label({ text: 'Block' })
+                    });
+                    
+                    blockBtn.connect('clicked', () => {
+                        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username], () => {
+                            this._updateDeviceLists();
+                        });
+                    });
+                    item.add_child(blockBtn);
+                    this._connectedSection.addMenuItem(item);
+                }
+            } else {
+                let item = new PopupMenu.PopupMenuItem('No devices connected', { reactive: false });
+                this._connectedSection.addMenuItem(item);
+            }
+        });
+        
+        // Fetch Blocked Clients
+        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
+            this._blockedSection.removeAll();
+            
+            let header = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
+            header.label.add_style_class_name('bold');
+            this._blockedSection.addMenuItem(header);
+            
+            if (success && stdout && stdout.trim()) {
+                let macs = stdout.trim().split('\n');
+                for (let mac of macs) {
+                    if (!mac) continue;
+                    let item = new PopupMenu.PopupMenuItem(mac);
+                    
+                    let unblockBtn = new St.Button({
+                        style_class: 'button',
+                        child: new St.Label({ text: 'Unblock' })
+                    });
+                    
+                    unblockBtn.connect('clicked', () => {
+                        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
+                            this._updateDeviceLists();
+                        });
+                    });
+                    item.add_child(unblockBtn);
+                    this._blockedSection.addMenuItem(item);
+                }
+            } else {
+                let item = new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false });
+                this._blockedSection.addMenuItem(item);
+            }
+        });
     }
 
     _startPollingLoop() {
-        // Fix: Safely clear any pre-existing timeout source before allocating a new one
         if (this._timeoutId > 0) {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
@@ -80,7 +178,10 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
         this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
             this._checkHotspotActiveState();
-            return GLib.SOURCE_CONTINUE; // Keeps the loop alive
+            if (this.menu.isOpen) {
+                this._updateDeviceLists();
+            }
+            return GLib.SOURCE_CONTINUE;
         });
     }
 
@@ -104,6 +205,9 @@ class HotspotRouterIndicator extends QuickSettings.SystemIndicator {
         
         // Add to quick settings items
         this.quickSettingsItems.push(this._toggle);
+        
+        // Add its menu to the indicator
+        this.menu.addMenuItem(this._toggle.menu);
     }
 
     destroy() {

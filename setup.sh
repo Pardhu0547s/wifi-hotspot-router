@@ -33,8 +33,8 @@ else
     fi
 fi
 
-echo "[+] Patching /usr/bin/create_ap for Client Limits..."
-sudo sed -i '/ap_isolate=\$ISOLATE_CLIENTS/{n;s/EOF/EOF\n\[\[ -n "\$MAX_NUM_STA" \]\] \&\& echo "max_num_sta=\$MAX_NUM_STA" >> \$CONFDIR\/hostapd.conf/}' /usr/bin/create_ap
+echo "[+] Patching /usr/bin/create_ap for Client Limits and MAC Filter..."
+sudo sed -i '/ap_isolate=\$ISOLATE_CLIENTS/{n;s/EOF/EOF\n\[\[ -n "\$MAX_NUM_STA" \]\] \&\& echo "max_num_sta=\$MAX_NUM_STA" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "macaddr_acl=0" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "deny_mac_file=\$DENY_MAC_FILE" >> \$CONFDIR\/hostapd.conf/}' /usr/bin/create_ap
 echo "[+] /usr/bin/create_ap successfully patched."
 
 echo -e "\n=== Phase 3: Installing start_hotspot and stop_hotspot ==="
@@ -73,12 +73,15 @@ fi
 # Step-2: Stop Fedora's firewall from blocking DHCP/DNS traffic
 /usr/bin/systemctl stop firewalld 2>/dev/null || true
 
-# Step 3: Setup Max Clients in environment if not zero/unlimited
+# Step 3: Setup Max Clients and Deny MAC File in environment
 if [ "$MAX_CLIENTS" -ne "0" ] 2>/dev/null; then
     export MAX_NUM_STA="$MAX_CLIENTS"
 else
     unset MAX_NUM_STA
 fi
+
+export DENY_MAC_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
+touch "$DENY_MAC_FILE"
 
 # Step 4: Kernel-level network performance tuning
 /usr/sbin/sysctl -w net.core.netdev_max_backlog=5000 2>/dev/null || true
@@ -122,6 +125,46 @@ sudo tee /usr/local/bin/stop_hotspot > /dev/null <<'EOF'
 /usr/bin/systemctl start firewalld 2>/dev/null || true
 EOF
 sudo chmod +x /usr/local/bin/stop_hotspot
+
+# manage_hotspot_clients
+sudo tee /usr/local/bin/manage_hotspot_clients > /dev/null <<'EOF'
+#!/bin/bash
+ACTION="$1"
+MAC="$2"
+USER_NAME="$3"
+
+DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
+CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
+IFACE=$(ip link show | grep -E "ap0|ap1|wlo1_ap" | head -1 | awk -F': ' '{print $2}')
+
+if [ "$ACTION" = "list" ]; then
+    if [ -n "$IFACE" ]; then
+        /usr/sbin/iw dev "$IFACE" station dump | grep Station | awk '{print $2}'
+    fi
+elif [ "$ACTION" = "block" ]; then
+    mkdir -p "/home/$USER_NAME/.config"
+    touch "$DENY_FILE"
+    if ! grep -q -i "$MAC" "$DENY_FILE"; then
+        echo "$MAC" >> "$DENY_FILE"
+    fi
+    if [ -n "$CTRL_DIR" ]; then
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
+    fi
+elif [ "$ACTION" = "unblock" ]; then
+    if [ -f "$DENY_FILE" ]; then
+        sed -i "/$MAC/Id" "$DENY_FILE"
+    fi
+    if [ -n "$CTRL_DIR" ]; then
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1
+    fi
+elif [ "$ACTION" = "list_blocked" ]; then
+    if [ -f "$DENY_FILE" ]; then
+        cat "$DENY_FILE"
+    fi
+fi
+EOF
+sudo chmod +x /usr/local/bin/manage_hotspot_clients
 echo "[+] Helper scripts installed."
 
 echo -e "\n=== Phase 4: Installing systemd Service Template ==="
@@ -152,6 +195,13 @@ polkit.addRule(function(action, subject, context) {
 });
 EOF
 echo "[+] Polkit rules installed."
+
+echo -e "\n=== Phase 5.5: Installing Sudoers Rule for manage_hotspot_clients ==="
+sudo tee /etc/sudoers.d/wifi-hotspot > /dev/null <<EOF
+ALL ALL=(ALL) NOPASSWD: /usr/local/bin/manage_hotspot_clients
+EOF
+sudo chmod 440 /etc/sudoers.d/wifi-hotspot
+echo "[+] Sudoers rule installed."
 
 echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
 # Tell NetworkManager to ignore wlo1_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
