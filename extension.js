@@ -48,16 +48,17 @@ class HotspotRouterToggle extends QuickSettings.QuickToggle {
 
     _checkHotspotActiveState() {
         try {
-            // Check if the virtual interface ap0 created by create_ap exists
+            // Check if the wifi-hotspot systemd service is active
+            let username = GLib.get_user_name();
             let proc = new Gio.Subprocess({
-                argv: ['ip', 'link', 'show', 'ap0'],
+                argv: ['systemctl', 'is-active', `wifi-hotspot@${username}.service`],
                 flags: Gio.SubprocessFlags.STDOUT_PIPE
             });
             proc.init(null);
             proc.communicate_utf8_async(null, null, (obj, res) => {
                 try {
                     let [success, stdout] = obj.communicate_utf8_finish(res);
-                    let active = success && stdout && stdout.includes('ap0');
+                    let active = success && stdout && stdout.trim() === 'active';
                     if (this.checked !== active) {
                         this.checked = active;
                     }
