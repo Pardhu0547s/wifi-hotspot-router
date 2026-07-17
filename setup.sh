@@ -107,11 +107,6 @@ if [ -z "$INTERNET_IFACE" ]; then
     INTERNET_IFACE="wlo1"
 fi
 
-# Use bridge mode for wired LAN (eliminates NAT overhead) or NAT for Wi-Fi sharing
-if [ "$INTERNET_IFACE" != "wlo1" ]; then
-    CMD_ARGS+=(-m bridge)
-fi
-
 CMD_ARGS+=(--dhcp-dns 1.1.1.1,8.8.8.8)
 CMD_ARGS+=("wlo1" "$INTERNET_IFACE" "$SSID")
 
