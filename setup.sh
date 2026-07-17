@@ -81,11 +81,19 @@ else
     unset MAX_NUM_STA
 fi
 
-# Step 4: Launch Hotspot with native NAT and auto-DHCP
+# Step 4: Kernel-level network performance tuning
+/usr/sbin/sysctl -w net.core.netdev_max_backlog=5000 2>/dev/null || true
+/usr/sbin/sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+/usr/sbin/sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+
+# Step 5: Launch Hotspot with maximum speed settings
 CMD_ARGS=()
 
 # Enable 802.11n High Throughput mode with 40MHz channel width for maximum speed
 CMD_ARGS+=(--ieee80211n --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC][DSSS_CCK-40]')
+
+# Use channel 6 (least congested non-overlapping 2.4GHz channel)
+CMD_ARGS+=(-c 6)
 
 if [ "$WIFI_BAND" = "5" ]; then
     CMD_ARGS+=(--freq-band 5)
@@ -97,6 +105,11 @@ fi
 INTERNET_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
 if [ -z "$INTERNET_IFACE" ]; then
     INTERNET_IFACE="wlo1"
+fi
+
+# Use bridge mode for wired LAN (eliminates NAT overhead) or NAT for Wi-Fi sharing
+if [ "$INTERNET_IFACE" != "wlo1" ]; then
+    CMD_ARGS+=(-m bridge)
 fi
 
 CMD_ARGS+=(--dhcp-dns 1.1.1.1,8.8.8.8)
