@@ -139,18 +139,30 @@ IFACE=$(ip link show | grep -E "ap0|ap1|wlo1_ap" | head -1 | awk -F': ' '{print 
 
 if [ "$ACTION" = "list" ]; then
     if [ -n "$IFACE" ]; then
-        /usr/sbin/iw dev "$IFACE" station dump | grep Station | awk '{print $2}'
+        MACS=$(/usr/sbin/iw dev "$IFACE" station dump | grep Station | awk '{print $2}')
+        for m in $MACS; do
+            HOSTNAME=$(cat /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | grep -i "$m" | awk '{print $4}' | head -1)
+            if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "*" ]; then
+                HOSTNAME="Unknown Device"
+            fi
+            echo "$m|$HOSTNAME"
+        done
     fi
 elif [ "$ACTION" = "block" ]; then
+    HOSTNAME="$4"
+    [ -z "$HOSTNAME" ] && HOSTNAME="Unknown Device"
     mkdir -p "/home/$USER_NAME/.config"
     touch "$DENY_FILE"
     if ! grep -q -i "$MAC" "$DENY_FILE"; then
-        echo "$MAC" >> "$DENY_FILE"
+        echo "$MAC|$HOSTNAME" >> "$DENY_FILE"
     fi
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1
         /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
     fi
+    # Robust iptables blocking
+    /usr/sbin/iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 elif [ "$ACTION" = "unblock" ]; then
     if [ -f "$DENY_FILE" ]; then
         sed -i "/$MAC/Id" "$DENY_FILE"
@@ -158,6 +170,8 @@ elif [ "$ACTION" = "unblock" ]; then
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1
     fi
+    /usr/sbin/iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    /usr/sbin/iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
         cat "$DENY_FILE"

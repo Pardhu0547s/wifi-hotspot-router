@@ -112,10 +112,14 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
             this._connectedSection.addMenuItem(header);
             
             if (success && stdout && stdout.trim()) {
-                let macs = stdout.trim().split('\n');
-                for (let mac of macs) {
-                    if (!mac) continue;
-                    let item = new PopupMenu.PopupMenuItem(mac);
+                let lines = stdout.trim().split('\n');
+                for (let line of lines) {
+                    if (!line) continue;
+                    let parts = line.split('|');
+                    let mac = parts[0];
+                    let hostname = parts.length > 1 ? parts[1] : mac;
+                    
+                    let item = new PopupMenu.PopupMenuItem(hostname);
                     
                     let blockBtn = new St.Button({
                         style_class: 'button',
@@ -123,7 +127,7 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
                     });
                     
                     blockBtn.connect('clicked', () => {
-                        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username], () => {
+                        this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname], () => {
                             this._updateDeviceLists();
                         });
                     });
@@ -145,10 +149,14 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
             this._blockedSection.addMenuItem(header);
             
             if (success && stdout && stdout.trim()) {
-                let macs = stdout.trim().split('\n');
-                for (let mac of macs) {
-                    if (!mac) continue;
-                    let item = new PopupMenu.PopupMenuItem(mac);
+                let lines = stdout.trim().split('\n');
+                for (let line of lines) {
+                    if (!line) continue;
+                    let parts = line.split('|');
+                    let mac = parts[0];
+                    let hostname = parts.length > 1 ? parts[1] : mac;
+                    
+                    let item = new PopupMenu.PopupMenuItem(hostname);
                     
                     let unblockBtn = new St.Button({
                         style_class: 'button',
