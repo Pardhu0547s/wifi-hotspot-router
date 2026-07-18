@@ -9,10 +9,32 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         let settings = this.getSettings();
         const config = this._loadSavedConfig();
+        
+        let hasUnsavedChanges = false;
 
         const page = new Adw.PreferencesPage();
         window.add(page);
 
+        // --- Action Header Group ---
+        const actionGroup = new Adw.PreferencesGroup();
+        page.add(actionGroup);
+
+        const saveRow = new Adw.ActionRow({
+            title: 'Unsaved Changes',
+            subtitle: 'You have modified settings. Save to apply them immediately.'
+        });
+        
+        const saveButton = new Gtk.Button({
+            label: 'Save & Restart',
+            css_classes: ['suggested-action'],
+            valign: Gtk.Align.CENTER,
+            sensitive: false
+        });
+        saveRow.add_suffix(saveButton);
+        actionGroup.add(saveRow);
+        saveRow.visible = false; // Hide until there are changes
+
+        // --- Network Config Group ---
         const group = new Adw.PreferencesGroup({
             title: 'Network Parameters Configuration',
             description: 'Configure your custom development local subnet environment securely'
@@ -89,6 +111,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             // Password validation indicator (WPA2-PSK requires at least 8 characters)
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
+            if (!passValid) return; // Prevent save if invalid
             
             // Sync GSettings (except the password key, which is deleted)
             settings.set_string('hotspot-ssid', ssid);
@@ -97,16 +120,75 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             
             // Save to secure config file
             this._saveConfig(ssid, usePass, pass, maxCl);
+            
+            hasUnsavedChanges = false;
+            saveRow.visible = false;
+            saveButton.sensitive = false;
+
+            // Restart hotspot if active
+            try {
+                let username = GLib.get_user_name();
+                let proc = new Gio.Subprocess({
+                    argv: ['systemctl', 'try-restart', `wifi-hotspot@${username}.service`],
+                    flags: Gio.SubprocessFlags.NONE
+                });
+                proc.init(null);
+                proc.wait_async(null, null);
+            } catch (e) {
+                console.error(e);
+            }
+        };
+
+        saveButton.connect('clicked', triggerSave);
+
+        // Mark as changed logic
+        const markChanged = () => {
+            let usePass = cryptoToggleRow.active;
+            let pass = passwordRow.get_text() || '';
+            let passValid = !usePass || (pass.length >= 8);
+            warningIcon.visible = !passValid;
+            
+            hasUnsavedChanges = true;
+            saveRow.visible = true;
+            saveButton.sensitive = passValid; // Only allow save if valid
         };
 
         // Listen for changes
-        ssidRow.connect('changed', triggerSave);
-        cryptoToggleRow.connect('notify::active', triggerSave);
-        passwordRow.connect('changed', triggerSave);
-        maxClientsAdjustment.connect('value-changed', triggerSave);
+        ssidRow.connect('changed', markChanged);
+        cryptoToggleRow.connect('notify::active', markChanged);
+        passwordRow.connect('changed', markChanged);
+        maxClientsAdjustment.connect('value-changed', markChanged);
 
-        // Initial validation run on load
-        triggerSave();
+        // Handle window close request
+        window.connect('close-request', (win) => {
+            if (hasUnsavedChanges) {
+                let dialog = new Adw.MessageDialog({
+                    heading: 'Unsaved Changes',
+                    body: 'You have modified your hotspot settings. Do you want to save them and restart the hotspot, or discard the changes?',
+                    transient_for: win
+                });
+                dialog.add_response('discard', 'Discard');
+                dialog.add_response('save', 'Save & Apply');
+                dialog.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE);
+                dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+                
+                dialog.connect('response', (dlg, response) => {
+                    if (response === 'save') {
+                        triggerSave();
+                    }
+                    hasUnsavedChanges = false; // Reset so next close request goes through
+                    win.close(); // Programmatically close now
+                });
+                
+                dialog.present();
+                return true; // Block closing
+            }
+            return false; // Allow closing
+        });
+
+        // Initial validation run on load (without triggering save)
+        let passInitValid = !config.usePassword || (config.password.length >= 8);
+        warningIcon.visible = !passInitValid;
     }
 
     _loadSavedConfig() {
