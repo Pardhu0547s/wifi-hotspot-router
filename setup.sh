@@ -103,8 +103,8 @@ done < "$DENY_MAC_FILE"
 # Step 5: Launch Hotspot with maximum speed settings
 CMD_ARGS=()
 
-# Enable 802.11n High Throughput mode with 40MHz channel width for maximum speed
-CMD_ARGS+=(--ieee80211n --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC][DSSS_CCK-40]')
+# Enable 802.11n High Throughput mode
+CMD_ARGS+=(--ieee80211n)
 
 # Auto-detect current Wi-Fi channel; DFS channels (52-64, 100-144) can't be used for AP
 CURRENT_CHAN=$(/usr/sbin/iw dev wlo1 info 2>/dev/null | grep 'channel' | awk '{print $2}')
@@ -115,8 +115,10 @@ elif [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 100 ] && [ "$CURRENT_CHAN" 
     IS_DFS=1
 fi
 if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null && [ "$IS_DFS" -eq 0 ]; then
-    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5)
+    # On 5GHz, we can safely use 802.11ac and HT40 without OBSS crashes
+    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
+    # On 2.4GHz, HT40 often crashes hostapd due to overlapping networks. Stick to safe HT20.
     CMD_ARGS+=(-c 6 --freq-band 2.4)
 fi
 
