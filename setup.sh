@@ -118,8 +118,8 @@ if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null && [ "$IS_DF
     # On 5GHz, we can safely use 802.11ac and HT40 without OBSS crashes
     CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz, HT40 often crashes hostapd due to overlapping networks. Stick to safe HT20.
-    CMD_ARGS+=(-c 6 --freq-band 2.4)
+    # On 2.4GHz, HT40 often crashes hostapd due to overlapping networks. Stick to safe HT20 by overriding the default HT40+.
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '[SHORT-GI-20][RX-STBC1]')
 fi
 
 # Dynamically detect active internet interface (default gateway route)
