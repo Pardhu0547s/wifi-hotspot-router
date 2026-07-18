@@ -106,14 +106,17 @@ CMD_ARGS=()
 # Enable 802.11n High Throughput mode
 CMD_ARGS+=(--ieee80211n)
 
-# Auto-detect current Wi-Fi channel to apply safe capabilities
+# Auto-detect current Wi-Fi channel to apply safe capabilities and prevent create_ap multi-channel bugs
 CURRENT_CHAN=$(/usr/sbin/iw dev wlo1 info 2>/dev/null | grep 'channel' | awk '{print $2}')
-if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-    # On 5GHz, we can safely use 802.11ac and HT40
-    CMD_ARGS+=(--ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+if [ -z "$CURRENT_CHAN" ]; then
+    # Not connected to Wi-Fi (e.g. LAN). Default to safe 2.4GHz channel 6.
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+elif [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
+    # On 5GHz, we MUST use the exact same channel due to Intel #channels <= 1 restriction
+    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz (or disconnected), use stable HT20
-    CMD_ARGS+=(--ht_capab '')
+    # On 2.4GHz, we MUST use the exact same channel. Use stable HT20.
+    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab '')
 fi
 
 # Dynamically detect active internet interface (default gateway route)
