@@ -185,8 +185,8 @@ elif [ "$ACTION" = "block" ]; then
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1
-        /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1    fi
-
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
+    fi
     # iptables firewall block
     /usr/sbin/iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
         /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
