@@ -163,6 +163,9 @@ if [ "$ACTION" = "list" ]; then
     if [ -n "$IFACE" ]; then
         MACS=$(/usr/sbin/iw dev "$IFACE" station dump | grep Station | awk '{print $2}')
         for m in $MACS; do
+            if grep -q -i "$m" "$DENY_FILE" 2>/dev/null; then
+                continue # Skip blocked devices aggressively trying to reconnect
+            fi
             HOSTNAME=$(cat /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | grep -i "$m" | awk '{print $4}' | head -1)
             if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "*" ]; then
                 HOSTNAME="Unknown Device"
@@ -187,16 +190,16 @@ elif [ "$ACTION" = "block" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1
         /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
     fi
-    # iptables firewall block
+    # Robust iptables firewall block (Check before inserting to prevent duplicates)
     /usr/sbin/iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
         /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    /usr/sbin/iptables -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        /usr/sbin/iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+
     # Force-delete station from radio driver
     if [ -n "$IFACE" ]; then
         /usr/sbin/iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
     fi
- # Robust iptables blocking
-    /usr/sbin/iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 
 elif [ "$ACTION" = "unblock" ]; then
     if [ -f "$DENY_FILE" ]; then
@@ -210,8 +213,9 @@ elif [ "$ACTION" = "unblock" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1
     fi
 
-    /usr/sbin/iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    /usr/sbin/iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    # Robustly delete all matching drop rules (in case of duplicates)
+    while /usr/sbin/iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+    while /usr/sbin/iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
         cat "$DENY_FILE"
