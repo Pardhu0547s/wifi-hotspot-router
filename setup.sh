@@ -80,8 +80,20 @@ else
     unset MAX_NUM_STA
 fi
 
-export DENY_MAC_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
+# The UI file stores MAC|hostname for display; hostapd needs plain MACs only
+UI_DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
+touch "$UI_DENY_FILE"
+export DENY_MAC_FILE="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
+awk -F'|' '{print $1}' "$UI_DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$DENY_MAC_FILE" 2>/dev/null || true
 touch "$DENY_MAC_FILE"
+
+# Apply iptables DROP rules for all previously blocked MACs at startup
+while IFS= read -r blocked_mac; do
+    if [ -n "$blocked_mac" ]; then
+        /usr/sbin/iptables -C FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || \
+            /usr/sbin/iptables -I FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
+    fi
+done < "$DENY_MAC_FILE"
 
 # Step 4: Kernel-level network performance tuning
 /usr/sbin/sysctl -w net.core.netdev_max_backlog=5000 2>/dev/null || true
@@ -94,8 +106,19 @@ CMD_ARGS=()
 # Enable 802.11n High Throughput mode with 40MHz channel width for maximum speed
 CMD_ARGS+=(--ieee80211n --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC][DSSS_CCK-40]')
 
-# Use channel 6 (least congested non-overlapping 2.4GHz channel)
-CMD_ARGS+=(-c 6)
+# Auto-detect current Wi-Fi channel; DFS channels (52-64, 100-144) can't be used for AP
+CURRENT_CHAN=$(/usr/sbin/iw dev wlo1 info 2>/dev/null | grep 'channel' | awk '{print $2}')
+IS_DFS=0
+if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 64 ] 2>/dev/null; then
+    IS_DFS=1
+elif [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 100 ] && [ "$CURRENT_CHAN" -le 144 ] 2>/dev/null; then
+    IS_DFS=1
+fi
+if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null && [ "$IS_DFS" -eq 0 ]; then
+    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5)
+else
+    CMD_ARGS+=(-c 6 --freq-band 2.4)
+fi
 
 # Dynamically detect active internet interface (default gateway route)
 INTERNET_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
@@ -156,21 +179,33 @@ elif [ "$ACTION" = "block" ]; then
     if ! grep -q -i "$MAC" "$DENY_FILE"; then
         echo "$MAC|$HOSTNAME" >> "$DENY_FILE"
     fi
+    # Regenerate pure-MAC hostapd deny file
+    HOSTAPD_DENY="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
+    awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
+    # Runtime hostapd ACL + triple-kick
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1
+        /usr/bin/hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1
         /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
     fi
-    # Robust iptables blocking
-    /usr/sbin/iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    # iptables firewall block
+    /usr/sbin/iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    # Force-delete station from radio driver
+    if [ -n "$IFACE" ]; then
+        /usr/sbin/iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
+    fi
 elif [ "$ACTION" = "unblock" ]; then
     if [ -f "$DENY_FILE" ]; then
         sed -i "/$MAC/Id" "$DENY_FILE"
     fi
+    # Regenerate pure-MAC hostapd deny file
+    HOSTAPD_DENY="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
+    awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
+    touch "$HOSTAPD_DENY"
     if [ -n "$CTRL_DIR" ]; then
         /usr/bin/hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1
     fi
-    /usr/sbin/iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
     /usr/sbin/iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
@@ -192,8 +227,11 @@ if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
         if [ -f "$DENY_FILE" ]; then
             if grep -q -i "$MAC" "$DENY_FILE"; then
                 CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
+                /usr/bin/hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1
                 /usr/bin/hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1
                 /usr/sbin/iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
+                /usr/sbin/iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+                    /usr/sbin/iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
             fi
         fi
     done
