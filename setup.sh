@@ -5,9 +5,15 @@ set -e
 
 # Configuration constraints
 UUID="wifi-hotspot-router@pardhu0547s.github.com"
-TARGET_DIR="$HOME/.local/share/gnome-shell/extensions/$UUID"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-USER_NAME=$(whoami)
+if [ -n "$SUDO_USER" ]; then
+    USER_NAME="$SUDO_USER"
+    REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    USER_NAME=$(whoami)
+    REAL_HOME="$HOME"
+fi
+TARGET_DIR="$REAL_HOME/.local/share/gnome-shell/extensions/$UUID"
 
 echo "=== Phase 1: Compiling GSettings Schemas ==="
 if [ -d "$SOURCE_DIR/schemas" ]; then
@@ -297,7 +303,7 @@ sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager ||
 echo "[+] NetworkManager configured to hide virtual interfaces from GUI."
 
 echo -e "\n=== Phase 7: Deploying GNOME Extension ==="
-mkdir -p "$HOME/.local/share/gnome-shell/extensions"
+mkdir -p "$REAL_HOME/.local/share/gnome-shell/extensions"
 if [ -L "$TARGET_DIR" ] || [ -d "$TARGET_DIR" ]; then
     rm -rf "$TARGET_DIR"
 fi
@@ -306,9 +312,9 @@ echo "[+] Symlink successfully pointing to development workspace directory."
 
 echo -e "\n=== Phase 8: Initialization ==="
 # Initialize a default configuration file if not exists
-CONFIG_DEST="$HOME/.config/wifi-hotspot.conf"
+CONFIG_DEST="$REAL_HOME/.config/wifi-hotspot.conf"
 if [ ! -f "$CONFIG_DEST" ]; then
-    echo '[+] Creating default config at ~/.config/wifi-hotspot.conf...'
+    echo "[+] Creating default config at $CONFIG_DEST..."
     cat <<EOF > "$CONFIG_DEST"
 SSID="hotspot"
 USE_PASSWORD="true"
