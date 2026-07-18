@@ -32,6 +32,14 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
         this._blockedSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._blockedSection);
 
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
+        settingsItem.connect('activate', () => {
+            this._extension.openPreferences();
+        });
+        this.menu.addMenuItem(settingsItem);
+
         // User action listener for the main toggle
         this.connect('clicked', () => {
             this._handleToggleEvent(this.checked);
