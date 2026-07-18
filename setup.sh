@@ -106,20 +106,14 @@ CMD_ARGS=()
 # Enable 802.11n High Throughput mode
 CMD_ARGS+=(--ieee80211n)
 
-# Auto-detect current Wi-Fi channel; DFS channels (52-64, 100-144) can't be used for AP
+# Auto-detect current Wi-Fi channel to apply safe capabilities
 CURRENT_CHAN=$(/usr/sbin/iw dev wlo1 info 2>/dev/null | grep 'channel' | awk '{print $2}')
-IS_DFS=0
-if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 64 ] 2>/dev/null; then
-    IS_DFS=1
-elif [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 100 ] && [ "$CURRENT_CHAN" -le 144 ] 2>/dev/null; then
-    IS_DFS=1
-fi
-if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null && [ "$IS_DFS" -eq 0 ]; then
-    # On 5GHz, we can safely use 802.11ac and HT40 without OBSS crashes
-    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
+    # On 5GHz, we can safely use 802.11ac and HT40
+    CMD_ARGS+=(--ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz, HT40 crashes hostapd due to overlapping networks. Stick to safe HT20 by clearing ht_capab.
-    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+    # On 2.4GHz (or disconnected), use stable HT20
+    CMD_ARGS+=(--ht_capab '')
 fi
 
 # Dynamically detect active internet interface (default gateway route)
