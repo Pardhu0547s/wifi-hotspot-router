@@ -34,7 +34,7 @@ else
 fi
 
 echo "[+] Patching /usr/bin/create_ap for Client Limits and MAC Filter..."
-sudo sed -i '/ap_isolate=\$ISOLATE_CLIENTS/{n;s/EOF/EOF\n\[\[ -n "\$MAX_NUM_STA" \]\] \&\& echo "max_num_sta=\$MAX_NUM_STA" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "macaddr_acl=0" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "deny_mac_file=\$DENY_MAC_FILE" >> \$CONFDIR\/hostapd.conf/}' /usr/bin/create_ap
+sudo sed -i '/ap_isolate=\$ISOLATE_CLIENTS/{n;s/EOF/EOF\n\[\[ -n "\$MAX_NUM_STA" \]\] \&\& echo "max_num_sta=\$MAX_NUM_STA" >> \$CONFDIR\/hostapd.conf\necho "noscan=1" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "macaddr_acl=0" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "deny_mac_file=\$DENY_MAC_FILE" >> \$CONFDIR\/hostapd.conf/}' /usr/bin/create_ap
 echo "[+] /usr/bin/create_ap successfully patched."
 
 echo -e "\n=== Phase 3: Installing start_hotspot and stop_hotspot ==="
@@ -118,8 +118,8 @@ if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null && [ "$IS_DF
     # On 5GHz, we can safely use 802.11ac and HT40 without OBSS crashes
     CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz, HT40 often crashes hostapd due to overlapping networks. Stick to safe HT20 by overriding the default HT40+.
-    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '[SHORT-GI-20][RX-STBC1]')
+    # On 2.4GHz, use HT40+ but noscan=1 (patched in create_ap) will prevent OBSS crash
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC][DSSS_CCK-40]')
 fi
 
 # Dynamically detect active internet interface (default gateway route)
