@@ -78,7 +78,9 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
                     try {
                         let [success, stdout] = obj.communicate_utf8_finish(res);
                         callback(success, stdout);
-                    } catch (err) {}
+                    } catch (err) {
+                        // Command output unavailable, ignore gracefully
+                    }
                 });
             } else {
                 proc.wait_async(null, null);
@@ -103,9 +105,13 @@ class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
                     if (this.checked !== active) {
                         this.checked = active;
                     }
-                } catch (err) {}
+                } catch (err) {
+                    // Service state check failed, will retry on next poll
+                }
             });
-        } catch (e) {}
+        } catch (e) {
+            // systemctl not available or service not installed
+        }
     }
 
     _updateDeviceLists() {

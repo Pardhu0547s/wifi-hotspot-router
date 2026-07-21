@@ -1,11 +1,11 @@
 {
-  "name": "Advanced Wi-Fi Hotspot Router",
+  "name": "Wi-Fi Hotspot Router",
   "description": "Native quick settings toggle to run dual-mode Wi-Fi hotspot sharing without losing active connection.",
   "uuid": "wifi-hotspot-router@pardhu0547s.github.com",
   "shell-version": [
-    "45", "46", "47", "48", "49", "50"
+    "45", "46", "47", "48"
   ],
-  "url": "https://github.com/Pardhu0547s/wifi-hotspot-router.git",
+  "url": "https://github.com/Pardhu0547s/wifi-hotspot-router",
   "version-name": "1.0",
   "donations": {
     "github": "Pardhu0547s",

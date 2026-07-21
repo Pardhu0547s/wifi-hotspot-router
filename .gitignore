@@ -8,6 +8,7 @@ schemas/gschemas.compiled
 .DS_Store
 .vscode/
 .idea/
+__pycache__/
 *~
 *.swp
 *.log
