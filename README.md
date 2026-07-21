@@ -3,6 +3,7 @@
 A premium GNOME Shell Quick Settings toggle to run a simultaneous Wi-Fi hotspot in Linux without losing your active internet/Wi-Fi connection.
 
 ![GNOME Quick Settings Toggle](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot.png)
+![GNOME Quick Settings Menu](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot-menu.png)
 
 ## 📡 The Problem & Solution
 Standard NetworkManager configurations typically treat your wireless interface as either a client (connecting to the internet) or an Access Point (broadcasting a hotspot). Toggling one disables the other.
