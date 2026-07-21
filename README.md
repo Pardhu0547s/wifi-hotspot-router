@@ -75,8 +75,6 @@ You can open the settings panel to configure:
 - **Passphrase**: Set a WPA2 password (stored securely in `~/.config/wifi-hotspot.conf` with `600` permissions).
 - **Max Connected Devices**: Limit the number of clients that can connect.
 
-![Hotspot Settings Panel](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot-settings.png)
-
 ---
 
 ## 🔒 Security Architecture
