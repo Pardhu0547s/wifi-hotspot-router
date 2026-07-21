@@ -65,11 +65,18 @@ if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
 
+# Dynamically detect Wi-Fi Interface
+WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | head -n 1)
+if [ -z "$WIFI_IFACE" ]; then
+    echo "Error: No Wi-Fi interface found."
+    exit 1
+fi
+
 # Clean up any leftover virtual interfaces from previous runs
-/usr/bin/create_ap --stop wlo1 2>/dev/null || true
+/usr/bin/create_ap --stop "$WIFI_IFACE" 2>/dev/null || true
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
-/usr/sbin/iw dev wlo1_ap del 2>/dev/null || true
+/usr/sbin/iw dev "${WIFI_IFACE}_ap" del 2>/dev/null || true
 
 # Step 1: Clear out local DNS system conflicts completely
 /usr/bin/systemctl stop dnsmasq 2>/dev/null || true
@@ -113,7 +120,7 @@ CMD_ARGS=()
 CMD_ARGS+=(--ieee80211n)
 
 # Auto-detect current Wi-Fi channel to apply safe capabilities and prevent create_ap multi-channel bugs
-CURRENT_CHAN=$(/usr/sbin/iw dev wlo1 info 2>/dev/null | grep 'channel' | awk '{print $2}')
+CURRENT_CHAN=$(/usr/sbin/iw dev "$WIFI_IFACE" info 2>/dev/null | grep 'channel' | awk '{print $2}')
 if [ -z "$CURRENT_CHAN" ]; then
     # Not connected to Wi-Fi (e.g. LAN). Default to safe 2.4GHz channel 6.
     CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
@@ -128,11 +135,11 @@ fi
 # Dynamically detect active internet interface (default gateway route)
 INTERNET_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
 if [ -z "$INTERNET_IFACE" ]; then
-    INTERNET_IFACE="wlo1"
+    INTERNET_IFACE="$WIFI_IFACE"
 fi
 
 CMD_ARGS+=(--dhcp-dns 1.1.1.1,8.8.8.8)
-CMD_ARGS+=("wlo1" "$INTERNET_IFACE" "$SSID")
+CMD_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
 
 if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
     CMD_ARGS+=("$PASSWORD")
@@ -145,10 +152,13 @@ sudo chmod +x /usr/local/bin/start_hotspot
 # stop_hotspot
 sudo tee /usr/local/bin/stop_hotspot > /dev/null <<'EOF'
 #!/bin/bash
-/usr/bin/create_ap --stop wlo1 || true
+WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | head -n 1)
+/usr/bin/create_ap --stop "$WIFI_IFACE" || true
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
-/usr/bin/nmcli dev set wlo1 managed yes || true
+if [ -n "$WIFI_IFACE" ]; then
+    /usr/bin/nmcli dev set "$WIFI_IFACE" managed yes || true
+fi
 /usr/bin/systemctl start systemd-resolved 2>/dev/null || true
 /usr/bin/systemctl start firewalld 2>/dev/null || true
 EOF
@@ -163,7 +173,7 @@ USER_NAME="$3"
 
 DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
 CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-IFACE=$(ip link show | grep -E "ap0|ap1|wlo1_ap" | head -1 | awk -F': ' '{print $2}')
+IFACE=$(ip link show | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
 
 if [ "$ACTION" = "list" ]; then
     if [ -n "$IFACE" ]; then
@@ -294,10 +304,10 @@ sudo chmod 440 /etc/sudoers.d/wifi-hotspot
 echo "[+] Sudoers rule installed."
 
 echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
-# Tell NetworkManager to ignore wlo1_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
+# Tell NetworkManager to ignore *_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<'EOF'
 [keyfile]
-unmanaged-devices=interface-name:wlo1_ap;interface-name:ap0;interface-name:ap1
+unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1
 EOF
 sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager || true
 echo "[+] NetworkManager configured to hide virtual interfaces from GUI."
