@@ -1,6 +1,6 @@
-# Advanced Wi-Fi Hotspot Router (GNOME Shell Extension)
+# Wi-Fi Hotspot Router (GNOME Shell Extension)
 
-A premium GNOME Shell Quick Settings toggle to run a simultaneous Wi-Fi hotspot in Linux without losing your active internet/Wi-Fi connection.
+A GNOME Shell Quick Settings toggle to run a simultaneous Wi-Fi hotspot in Linux without losing your active internet/Wi-Fi connection.
 
 ![GNOME Quick Settings Toggle](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot.png)
 ![GNOME Quick Settings Menu](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot-menu.png)
@@ -29,12 +29,7 @@ sudo apt install -y hostapd dnsmasq iw haveged iptables procps iproute2
 sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
 sudo chmod +x /usr/bin/create_ap
 
-# Ubuntu / Debian (Method 2: PPA)
-sudo add-apt-repository ppa:lakinduakash/lwh
-sudo apt update
-sudo apt install -y linux-wifi-hotspot
-
-# Ubuntu / Debian (Method 3: Manual Build - if PPA fails on newer versions)
+# Ubuntu / Debian (Method 2: Manual Build)
 sudo apt install -y libgtk-3-dev build-essential gcc g++ pkg-config make hostapd libqrencode-dev libpng-dev
 git clone https://github.com/lakinduakash/linux-wifi-hotspot
 cd linux-wifi-hotspot
