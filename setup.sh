@@ -65,8 +65,8 @@ if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 fi
 
-# Dynamically detect Wi-Fi Interface
-WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | head -n 1)
+# Dynamically detect Wi-Fi Interface (ignoring virtual AP interfaces)
+WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]' | head -n 1)
 if [ -z "$WIFI_IFACE" ]; then
     echo "Error: No Wi-Fi interface found."
     exit 1
@@ -121,14 +121,19 @@ CMD_ARGS+=(--ieee80211n)
 
 # Auto-detect current Wi-Fi channel to apply safe capabilities and prevent create_ap multi-channel bugs
 CURRENT_CHAN=$(/usr/sbin/iw dev "$WIFI_IFACE" info 2>/dev/null | grep 'channel' | awk '{print $2}')
-if [ -z "$CURRENT_CHAN" ]; then
-    # Not connected to Wi-Fi (e.g. LAN). Default to safe 2.4GHz channel 6.
+IS_DFS=0
+if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ] 2>/dev/null; then
+    IS_DFS=1
+fi
+
+if [ -z "$CURRENT_CHAN" ] || [ "$IS_DFS" -eq 1 ]; then
+    # Not connected to Wi-Fi, or connected to a DFS channel (52-144). Default to safe 2.4GHz channel 6.
     CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
 elif [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-    # On 5GHz, we MUST use the exact same channel due to Intel #channels <= 1 restriction
+    # On non-DFS 5GHz, match channel safely
     CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz, we MUST use the exact same channel. Use stable HT20.
+    # On 2.4GHz, match channel
     CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab '')
 fi
 
@@ -152,7 +157,7 @@ sudo chmod +x /usr/local/bin/start_hotspot
 # stop_hotspot
 sudo tee /usr/local/bin/stop_hotspot > /dev/null <<'EOF'
 #!/bin/bash
-WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | head -n 1)
+WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]' | head -n 1)
 /usr/bin/create_ap --stop "$WIFI_IFACE" || true
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
