@@ -9,13 +9,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         let settings = this.getSettings();
         const config = this._loadSavedConfig();
-        
+
         let hasUnsavedChanges = false;
 
         const page = new Adw.PreferencesPage();
         window.add(page);
 
-        // --- Action Header Group ---
         const actionGroup = new Adw.PreferencesGroup();
         page.add(actionGroup);
 
@@ -23,7 +22,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             title: 'Unsaved Changes',
             subtitle: 'You have modified settings. Save to apply them immediately.'
         });
-        
+
         const saveButton = new Gtk.Button({
             label: 'Save & Restart',
             css_classes: ['suggested-action'],
@@ -32,37 +31,32 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         saveRow.add_suffix(saveButton);
         actionGroup.add(saveRow);
-        saveRow.visible = false; // Hide until there are changes
+        saveRow.visible = false;
 
-        // --- Network Config Group ---
         const group = new Adw.PreferencesGroup({
             title: 'Network Parameters Configuration',
             description: 'Configure your custom development local subnet environment securely'
         });
         page.add(group);
 
-        // 1. SSID Row
         const ssidRow = new Adw.EntryRow({
             title: 'Hotspot Name (SSID)',
             text: config.ssid
         });
         group.add(ssidRow);
 
-        // 2. Crypto Mode Row
         const cryptoToggleRow = new Adw.SwitchRow({
             title: 'Enable Password Security (WPA2-PSK)',
             active: config.usePassword
         });
         group.add(cryptoToggleRow);
 
-        // 3. Secure Key Password Row
         const passwordRow = new Adw.PasswordEntryRow({
             title: 'Security Key (Minimum 8 Characters)',
             text: config.password
         });
         group.add(passwordRow);
 
-        // Warning Icon suffix for validation
         const warningIcon = new Gtk.Image({
             iconName: 'dialog-warning-symbolic',
             visible: false,
@@ -73,7 +67,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
         cryptoToggleRow.bind_property('active', passwordRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
 
-        // 4. Client Constraint Row
         const maxClientsAdjustment = new Gtk.Adjustment({
             lower: 1,
             upper: 32,
@@ -88,7 +81,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         group.add(clientLimitRow);
 
 
-        // 6. Support / Donations Row
         const donationsRow = new Adw.ActionRow({
             title: 'Support This Project',
             subtitle: 'Donate or star the repository to support development'
@@ -101,31 +93,26 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         donationsRow.add_suffix(linkButton);
         group.add(donationsRow);
 
-        // Save helper function
         const triggerSave = () => {
             let ssid = ssidRow.get_text() || 'hotspot';
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
-            
-            // Password validation indicator (WPA2-PSK requires at least 8 characters)
+
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
-            if (!passValid) return; // Prevent save if invalid
-            
-            // Sync GSettings (except the password key, which is deleted)
+            if (!passValid) return;
+
             settings.set_string('hotspot-ssid', ssid);
             settings.set_boolean('use-password', usePass);
             settings.set_int('max-clients', maxCl);
-            
-            // Save to secure config file
+
             this._saveConfig(ssid, usePass, pass, maxCl);
-            
+
             hasUnsavedChanges = false;
             saveRow.visible = false;
             saveButton.sensitive = false;
 
-            // Restart hotspot if active
             try {
                 let username = GLib.get_user_name();
                 let proc = new Gio.Subprocess({
@@ -141,25 +128,22 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
         saveButton.connect('clicked', triggerSave);
 
-        // Mark as changed logic
         const markChanged = () => {
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
-            
+
             hasUnsavedChanges = true;
             saveRow.visible = true;
-            saveButton.sensitive = passValid; // Only allow save if valid
+            saveButton.sensitive = passValid;
         };
 
-        // Listen for changes
         ssidRow.connect('changed', markChanged);
         cryptoToggleRow.connect('notify::active', markChanged);
         passwordRow.connect('changed', markChanged);
         maxClientsAdjustment.connect('value-changed', markChanged);
 
-        // Handle window close request
         window.connect('close-request', (win) => {
             if (hasUnsavedChanges) {
                 let dialog = new Adw.MessageDialog({
@@ -171,22 +155,21 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                 dialog.add_response('save', 'Save & Apply');
                 dialog.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE);
                 dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
-                
+
                 dialog.connect('response', (dlg, response) => {
                     if (response === 'save') {
                         triggerSave();
                     }
-                    hasUnsavedChanges = false; // Reset so next close request goes through
-                    win.close(); // Programmatically close now
+                    hasUnsavedChanges = false;
+                    win.close();
                 });
-                
+
                 dialog.present();
-                return true; // Block closing
+                return true;
             }
-            return false; // Allow closing
+            return false;
         });
 
-        // Initial validation run on load (without triggering save)
         let passInitValid = !config.usePassword || (config.password.length >= 8);
         warningIcon.visible = !passInitValid;
     }
@@ -233,7 +216,7 @@ MAX_CLIENTS="${maxClients}"
 `;
         try {
             GLib.file_set_contents(path, output);
-            GLib.chmod(path, 384); // Secure permissions to 600 (owner read/write only)
+            GLib.chmod(path, 384);
         } catch (e) {
             console.error('[HotspotRouter] Error saving config: ' + e.message);
         }
