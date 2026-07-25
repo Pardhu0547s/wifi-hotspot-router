@@ -45,12 +45,10 @@ const HotspotRouterToggle = GObject.registerClass(
                 this._handleToggleEvent(this.checked);
             });
 
-
             this._checkHotspotActiveState();
             this._startPollingLoop();
 
-
-            this.menu.connect('open-state-changed', (menu, isOpen) => {
+            this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
                     this._updateDeviceLists();
                 }
@@ -210,6 +208,10 @@ const HotspotRouterToggle = GObject.registerClass(
             if (this._timeoutId > 0) {
                 GLib.Source.remove(this._timeoutId);
                 this._timeoutId = 0;
+            }
+            if (this._openStateId > 0) {
+                this.menu.disconnect(this._openStateId);
+                this._openStateId = 0;
             }
             super.destroy();
         }
