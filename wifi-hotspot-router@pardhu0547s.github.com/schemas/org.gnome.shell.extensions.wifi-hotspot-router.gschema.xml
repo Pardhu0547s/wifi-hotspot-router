@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.wifi-hotspot-router" path="/org/gnome/shell/extensions/wifi-hotspot-router/">
+    <key name="hotspot-ssid" type="s">
+      <default>'hotspot'</default>
+      <summary>Hotspot SSID</summary>
+    </key>
+    <key name="use-password" type="b">
+      <default>true</default>
+      <summary>Toggle Password Security Mode</summary>
+    </key>
+    <key name="max-clients" type="i">
+      <default>10</default>
+      <summary>Maximum Client Connections Limit</summary>
+    </key>
+  </schema>
+</schemalist>

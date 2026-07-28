@@ -162,6 +162,8 @@ WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | grep -v '_ap$'
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
 if [ -n "$WIFI_IFACE" ]; then
+    /usr/sbin/iw dev "${WIFI_IFACE}_ap" del 2>/dev/null || true
+    /usr/sbin/iw dev wlo1_ap del 2>/dev/null || true
     /usr/bin/nmcli dev set "$WIFI_IFACE" managed yes || true
 fi
 /usr/bin/systemctl start systemd-resolved 2>/dev/null || true
@@ -312,7 +314,7 @@ echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
 # Tell NetworkManager to ignore *_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<'EOF'
 [keyfile]
-unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1
+unmanaged-devices=interface-name:~.*_ap;interface-name:*_ap;interface-name:ap0;interface-name:ap1;interface-name:wlo1_ap
 EOF
 sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager || true
 echo "[+] NetworkManager configured to hide virtual interfaces from GUI."
