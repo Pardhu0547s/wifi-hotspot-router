@@ -126,8 +126,24 @@ if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le
     IS_DFS=1
 fi
 
-if [ -z "$CURRENT_CHAN" ] || [ "$IS_DFS" -eq 1 ]; then
-    # Not connected to Wi-Fi, or connected to a DFS channel (52-144). Default to safe 2.4GHz channel 6.
+# Check if we have a non-Wi-Fi internet connection (LAN/Ethernet)
+HAS_LAN=0
+LAN_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
+if [ -n "$LAN_IFACE" ] && [ "$LAN_IFACE" != "$WIFI_IFACE" ]; then
+    HAS_LAN=1
+fi
+
+if [ "$IS_DFS" -eq 1 ] && [ "$HAS_LAN" -eq 0 ]; then
+    # On DFS channel with Wi-Fi-only internet: Intel #channels<=1 restriction
+    # means we can't use a different channel for the AP. We must temporarily
+    # disconnect Wi-Fi so the card is free, then start hotspot on 2.4GHz ch 6.
+    # create_ap will handle internet sharing once it takes over the interface.
+    WIFI_CONNECTION=$(/usr/bin/nmcli -t -f NAME,DEVICE con show --active | grep ":${WIFI_IFACE}$" | head -1 | cut -d: -f1)
+    /usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
+    sleep 1
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+elif [ -z "$CURRENT_CHAN" ] || [ "$IS_DFS" -eq 1 ]; then
+    # Not connected to Wi-Fi, or DFS with LAN available. Safe to use channel 6.
     CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
 elif [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
     # On non-DFS 5GHz, match channel safely
@@ -161,9 +177,11 @@ WIFI_IFACE=$(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | grep -v '_ap$'
 /usr/bin/create_ap --stop "$WIFI_IFACE" || true
 /usr/sbin/iw dev ap0 del 2>/dev/null || true
 /usr/sbin/iw dev ap1 del 2>/dev/null || true
+# Clean up ALL virtual AP interfaces (wlo1_ap, wlan0_ap, wlp0s20f3_ap, etc.)
+for vap in $(/usr/sbin/iw dev | awk '$1=="Interface"{print $2}' | grep '_ap$'); do
+    /usr/sbin/iw dev "$vap" del 2>/dev/null || true
+done
 if [ -n "$WIFI_IFACE" ]; then
-    /usr/sbin/iw dev "${WIFI_IFACE}_ap" del 2>/dev/null || true
-    /usr/sbin/iw dev wlo1_ap del 2>/dev/null || true
     /usr/bin/nmcli dev set "$WIFI_IFACE" managed yes || true
 fi
 /usr/bin/systemctl start systemd-resolved 2>/dev/null || true
