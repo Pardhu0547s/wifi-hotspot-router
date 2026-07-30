@@ -340,10 +340,10 @@ EOF
 # This runs before NetworkManager ever sees the interface, so GNOME never
 # shows the "(wlo1)" disambiguation label.
 sudo tee /etc/udev/rules.d/99-wifi-hotspot-cleanup.rules > /dev/null <<'EOF'
-# When any *_ap or ap0/ap1 interface appears, check if the hotspot is running.
-# If not, delete it immediately so NetworkManager and GNOME never see it.
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="*_ap", RUN+="/bin/bash -c 'if ! /usr/bin/systemctl is-active --quiet wifi-hotspot@*.service 2>/dev/null; then /usr/sbin/iw dev %k del 2>/dev/null || true; fi'"
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="ap[0-9]*", RUN+="/bin/bash -c 'if ! /usr/bin/systemctl is-active --quiet wifi-hotspot@*.service 2>/dev/null; then /usr/sbin/iw dev %k del 2>/dev/null || true; fi'"
+# When any *_ap or ap0/ap1 interface appears, check if the hotspot is running
+# or starting. If not, delete it immediately so NetworkManager and GNOME never see it.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="*_ap", RUN+="/bin/bash -c 'STATUS=$(/usr/bin/systemctl show -p ActiveState --value wifi-hotspot@*.service 2>/dev/null); if [ \"$STATUS\" != \"active\" ] && [ \"$STATUS\" != \"activating\" ]; then /usr/sbin/iw dev %k del 2>/dev/null || true; fi'"
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="ap[0-9]*", RUN+="/bin/bash -c 'STATUS=$(/usr/bin/systemctl show -p ActiveState --value wifi-hotspot@*.service 2>/dev/null); if [ \"$STATUS\" != \"active\" ] && [ \"$STATUS\" != \"activating\" ]; then /usr/sbin/iw dev %k del 2>/dev/null || true; fi'"
 EOF
 sudo udevadm control --reload-rules
 
