@@ -329,10 +329,11 @@ sudo chmod 440 /etc/sudoers.d/wifi-hotspot
 echo "[+] Sudoers rule installed."
 
 echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
-# Tell NetworkManager to ignore *_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
+# Tell NetworkManager to ignore hotspot virtual interfaces and VMware adapters
+# so GNOME Quick Settings does not add "PCI" disambiguation labels
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<'EOF'
 [keyfile]
-unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1
+unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1;interface-name:vmnet*
 EOF
 
 # Install a udev rule that deletes stale virtual AP interfaces the instant the
