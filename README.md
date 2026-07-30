@@ -19,25 +19,33 @@ To avoid interactive password prompts, `setup.sh` deploys a passwordless systemd
 ### 1. Prerequisites
 The extension relies on `linux-wifi-hotspot` (`create_ap`). Install it along with necessary system dependencies:
 
+**Fedora (Streamlined via curl)**
 ```bash
-# Fedora
-sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel
+sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel hostapd dnsmasq iw haveged iptables procps-ng iproute util-linux
+sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
+sudo chmod +x /usr/bin/create_ap
+```
 
-# Ubuntu / Debian (Method 1: Streamlined via curl)
+**Ubuntu / Debian (Method 1: Streamlined via curl)**
+```bash
 sudo apt update
 sudo apt install -y hostapd dnsmasq iw haveged iptables procps iproute2
 sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
 sudo chmod +x /usr/bin/create_ap
+```
 
-# Ubuntu / Debian (Method 2: Manual Build)
+**Ubuntu / Debian (Method 2: Manual Build)**
+```bash
 sudo apt install -y libgtk-3-dev build-essential gcc g++ pkg-config make hostapd libqrencode-dev libpng-dev
 git clone https://github.com/lakinduakash/linux-wifi-hotspot
 cd linux-wifi-hotspot
 make
 sudo make install
 cd ..
+```
 
-# Arch Linux
+**Arch Linux**
+```bash
 sudo pacman -S gtk3 pkgconf qrencode linux-wifi-hotspot
 ```
 
@@ -45,6 +53,7 @@ sudo pacman -S gtk3 pkgconf qrencode linux-wifi-hotspot
 Clone the repository and run the setup script:
 
 ```bash
+git clone https://github.com/Pardhu0547s/wifi-hotspot-router.git
 cd wifi-hotspot-router
 chmod +x setup.sh
 ./setup.sh
