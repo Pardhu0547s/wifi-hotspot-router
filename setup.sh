@@ -332,10 +332,36 @@ echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
 # Tell NetworkManager to ignore *_ap, ap0, and ap1 so they do not show up in the GUI Wi-Fi menu
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<'EOF'
 [keyfile]
-unmanaged-devices=interface-name:~.*_ap;interface-name:*_ap;interface-name:ap0;interface-name:ap1;interface-name:wlo1_ap
+unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1
 EOF
+
+# Install a boot-time cleanup service that deletes stale virtual AP interfaces
+# BEFORE NetworkManager starts. This prevents GNOME from seeing two Wi-Fi devices
+# and adding the "(wlo1)" disambiguation label.
+sudo tee /etc/systemd/system/wifi-hotspot-cleanup.service > /dev/null <<'EOF'
+[Unit]
+Description=Clean up stale virtual AP interfaces from previous hotspot sessions
+DefaultDependencies=no
+Before=NetworkManager.service
+After=sys-subsystem-net-devices-wlo1.device
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for vap in $(/usr/sbin/iw dev 2>/dev/null | awk '\''$1=="Interface"{print $2}'\'' | grep "_ap$"); do /usr/sbin/iw dev "$vap" del 2>/dev/null || true; done; for vap in $(/usr/sbin/iw dev 2>/dev/null | awk '\''$1=="Interface"{print $2}'\'' | grep "^ap[0-9]"); do /usr/sbin/iw dev "$vap" del 2>/dev/null || true; done'
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable wifi-hotspot-cleanup.service
+
+# Remove the dispatcher script if it exists (replaced by the systemd service above)
+sudo rm -f /etc/NetworkManager/dispatcher.d/99-cleanup-vap
+
 sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager || true
 echo "[+] NetworkManager configured to hide virtual interfaces from GUI."
+echo "[+] Boot-time AP cleanup service installed and enabled."
 
 echo -e "\n=== Phase 7: Deploying GNOME Extension ==="
 mkdir -p "$REAL_HOME/.local/share/gnome-shell/extensions"
