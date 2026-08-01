@@ -133,7 +133,14 @@ if [ -n "$LAN_IFACE" ] && [ "$LAN_IFACE" != "$WIFI_IFACE" ]; then
     HAS_LAN=1
 fi
 
-if [ "$IS_DFS" -eq 1 ] && [ "$HAS_LAN" -eq 0 ]; then
+if [ "$HAS_LAN" -eq 1 ] && [ -n "$CURRENT_CHAN" ]; then
+    # We have Ethernet for internet, but Wi-Fi is connected.
+    # Intel cards often fail to create an AP on 5GHz channels due to regulatory NO-IR 
+    # (PASSIVE-SCAN) rules. We must disconnect Wi-Fi to free the radio for 2.4GHz.
+    /usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
+    sleep 1
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+elif [ "$IS_DFS" -eq 1 ]; then
     # On DFS channel with Wi-Fi-only internet: Intel #channels<=1 restriction
     # means we can't use a different channel for the AP. We must temporarily
     # disconnect Wi-Fi so the card is free, then start hotspot on 2.4GHz ch 6.
@@ -142,8 +149,8 @@ if [ "$IS_DFS" -eq 1 ] && [ "$HAS_LAN" -eq 0 ]; then
     /usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
     sleep 1
     CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
-elif [ -z "$CURRENT_CHAN" ] || [ "$IS_DFS" -eq 1 ]; then
-    # Not connected to Wi-Fi, or DFS with LAN available. Safe to use channel 6.
+elif [ -z "$CURRENT_CHAN" ]; then
+    # Not connected to Wi-Fi. Safe to use channel 6.
     CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
 elif [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
     # On non-DFS 5GHz, match channel safely
