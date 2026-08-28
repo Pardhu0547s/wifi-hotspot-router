@@ -50,15 +50,18 @@ const HotspotRouterToggle = GObject.registerClass(
             });
 
             // QR Code display container (inside the scroll view)
-            this._qrCodeContainer = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-            this._qrCodeIcon = new St.Icon({
-                icon_size: 150,
+            this._qrCodeContainer = new St.Bin({
                 x_expand: true,
                 x_align: Clutter.ActorAlign.CENTER,
+                y_expand: false,
+                style: 'padding: 12px 0;',
             });
-            let qrBoxLayout = new St.BoxLayout({ x_expand: true, x_align: Clutter.ActorAlign.CENTER });
-            qrBoxLayout.add_child(this._qrCodeIcon);
-            this._qrCodeContainer.add_child(qrBoxLayout);
+            this._qrCodeIcon = new St.Icon({
+                icon_size: 180,
+                width: 180,
+                height: 180,
+            });
+            this._qrCodeContainer.set_child(this._qrCodeIcon);
             this._scrollContent.add_child(this._qrCodeContainer);
             this._qrCodeContainer.hide();
 
