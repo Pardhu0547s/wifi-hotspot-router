@@ -23,7 +23,33 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this.menu.setHeader('network-wireless-hotspot-symbolic', 'Hotspot Devices', 'Manage connected clients');
 
-            // QR Code display container
+            // Create a wrapper item for the scroll view
+            this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            this._scrollViewItem.set_style('padding: 0; margin: 0;');
+            this._scrollViewItem.y_expand = true;
+            
+            this._scrollView = new St.ScrollView({
+                style_class: 'vfade',
+                hscrollbar_policy: St.PolicyType.NEVER,
+                vscrollbar_policy: St.PolicyType.AUTOMATIC,
+                x_expand: true,
+                y_expand: true,
+            });
+
+            this._scrollContent = new St.BoxLayout({
+                vertical: true,
+                x_expand: true,
+                y_expand: true
+            });
+
+            // Dynamically adjust wrapper height based on content to prevent 0-height collapse
+            this._scrollContent.connect('notify::height', () => {
+                let h = this._scrollContent.get_height();
+                let constrainedHeight = Math.min(Math.max(h, 250), 450);
+                this._scrollViewItem.set_style(`min-height: ${constrainedHeight}px; max-height: ${constrainedHeight}px; padding: 0; margin: 0;`);
+            });
+
+            // QR Code display container (inside the scroll view)
             this._qrCodeContainer = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
             this._qrCodeIcon = new St.Icon({
                 icon_size: 150,
@@ -33,20 +59,29 @@ const HotspotRouterToggle = GObject.registerClass(
             let qrBoxLayout = new St.BoxLayout({ x_expand: true, x_align: Clutter.ActorAlign.CENTER });
             qrBoxLayout.add_child(this._qrCodeIcon);
             this._qrCodeContainer.add_child(qrBoxLayout);
-            this.menu.addMenuItem(this._qrCodeContainer);
+            this._scrollContent.add_child(this._qrCodeContainer);
             this._qrCodeContainer.hide();
 
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            let qrSeparator = new PopupMenu.PopupSeparatorMenuItem();
+            this._scrollContent.add_child(qrSeparator);
+            
+            // Store reference to hide/show separator with QR code
+            this._qrSeparator = qrSeparator;
 
             // Connected clients section
             this._connectedSection = new PopupMenu.PopupMenuSection();
-            this.menu.addMenuItem(this._connectedSection);
+            this._scrollContent.add_child(this._connectedSection.actor);
 
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
 
             // Blocked clients section
             this._blockedSection = new PopupMenu.PopupMenuSection();
-            this.menu.addMenuItem(this._blockedSection);
+            this._scrollContent.add_child(this._blockedSection.actor);
+
+            this._scrollView.set_child(this._scrollContent);
+            this._scrollViewItem.add_child(this._scrollView);
+
+            this.menu.addMenuItem(this._scrollViewItem);
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -120,8 +155,10 @@ const HotspotRouterToggle = GObject.registerClass(
                     let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
                     this._qrCodeIcon.set_gicon(gicon);
                     this._qrCodeContainer.show();
+                    if (this._qrSeparator) this._qrSeparator.show();
                 } else {
                     this._qrCodeContainer.hide();
+                    if (this._qrSeparator) this._qrSeparator.hide();
                 }
             });
         }
