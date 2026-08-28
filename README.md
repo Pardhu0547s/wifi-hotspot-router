@@ -21,7 +21,7 @@ The extension relies on `linux-wifi-hotspot` (`create_ap`). Install it along wit
 
 **Fedora (Streamlined via curl)**
 ```bash
-sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel hostapd dnsmasq iw haveged iptables procps-ng iproute util-linux
+sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel qrencode hostapd dnsmasq iw haveged iptables procps-ng iproute util-linux
 sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
 sudo chmod +x /usr/bin/create_ap
 ```
@@ -29,7 +29,7 @@ sudo chmod +x /usr/bin/create_ap
 **Ubuntu / Debian (Method 1: Streamlined via curl)**
 ```bash
 sudo apt update
-sudo apt install -y hostapd dnsmasq iw haveged iptables procps iproute2
+sudo apt install -y hostapd dnsmasq iw haveged iptables procps iproute2 qrencode
 sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
 sudo chmod +x /usr/bin/create_ap
 ```

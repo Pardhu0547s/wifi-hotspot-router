@@ -6,6 +6,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
+import Clutter from 'gi://Clutter';
 
 const HotspotRouterToggle = GObject.registerClass(
     class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
@@ -22,15 +23,50 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this.menu.setHeader('network-wireless-hotspot-symbolic', 'Hotspot Devices', 'Manage connected clients');
 
-
-            this._connectedSection = new PopupMenu.PopupMenuSection();
-            this.menu.addMenuItem(this._connectedSection);
+            // QR Code display container
+            this._qrCodeContainer = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            this._qrCodeIcon = new St.Icon({
+                icon_size: 150,
+                x_expand: true,
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            let qrBoxLayout = new St.BoxLayout({ x_expand: true, x_align: Clutter.ActorAlign.CENTER });
+            qrBoxLayout.add_child(this._qrCodeIcon);
+            this._qrCodeContainer.add_child(qrBoxLayout);
+            this.menu.addMenuItem(this._qrCodeContainer);
+            this._qrCodeContainer.hide();
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+            // Scroll view for connected/blocked clients
+            this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            
+            this._scrollView = new St.ScrollView({
+                style_class: 'vfade',
+                hscrollbar_policy: St.PolicyType.NEVER,
+                vscrollbar_policy: St.PolicyType.AUTOMATIC,
+                x_expand: true,
+                y_expand: true,
+            });
+            // Restrict maximum height to prevent menu overflow
+            this._scrollView.set_style('max-height: 250px;');
+
+            this._scrollContent = new St.BoxLayout({
+                vertical: true,
+                x_expand: true,
+                y_expand: true
+            });
+
+            this._connectedSection = new PopupMenu.PopupMenuSection();
+            this._scrollContent.add_child(this._connectedSection.actor);
 
             this._blockedSection = new PopupMenu.PopupMenuSection();
-            this.menu.addMenuItem(this._blockedSection);
+            this._scrollContent.add_child(this._blockedSection.actor);
+
+            this._scrollView.set_child(this._scrollContent);
+            this._scrollViewItem.add_child(this._scrollView);
+
+            this.menu.addMenuItem(this._scrollViewItem);
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -50,7 +86,62 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
+                    this._updateQRCode();
                     this._updateDeviceLists();
+                }
+            });
+        }
+
+        _updateQRCode() {
+            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+            let ssid = 'hotspot';
+            let usePassword = true;
+            let password = '';
+            
+            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+                try {
+                    let [success, content] = GLib.file_get_contents(path);
+                    if (success) {
+                        let decoder = new TextDecoder('utf-8');
+                        let lines = decoder.decode(content).split('\n');
+                        for (let line of lines) {
+                            let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
+                            if (match) {
+                                let [_, key, value] = match;
+                                if (key === 'SSID') ssid = value;
+                                else if (key === 'USE_PASSWORD') usePassword = (value === 'true');
+                                else if (key === 'PASSWORD') password = value;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error(`[HotspotRouter] Failed to read config for QR code: ${e.message}`);
+                }
+            }
+            
+            let qrString = `WIFI:S:${ssid};T:${usePassword ? 'WPA' : 'nopass'};P:${usePassword ? password : ''};;`;
+            
+            if (this._lastQrString === qrString) {
+                return; // Already generated and displayed
+            }
+            this._lastQrString = qrString;
+            
+            // Use a unique filename to bypass St.Icon texture caching when the password changes
+            let qrFile = `/tmp/wifi-hotspot-qr-${Date.now()}.png`;
+            
+            // Clean up previous QR code file
+            if (this._lastQrFile) {
+                try { Gio.File.new_for_path(this._lastQrFile).delete(null); } catch(e) {}
+            }
+            this._lastQrFile = qrFile;
+            
+            this._runCommand(['qrencode', '-t', 'PNG', '-s', '5', '-o', qrFile, qrString], (success) => {
+                if (success && GLib.file_test(qrFile, GLib.FileTest.EXISTS)) {
+                    let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
+                    this._qrCodeIcon.set_gicon(gicon);
+                    this._qrCodeContainer.show();
+                } else {
+                    this._qrCodeContainer.hide();
                 }
             });
         }
