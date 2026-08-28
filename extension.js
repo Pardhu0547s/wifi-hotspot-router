@@ -81,18 +81,19 @@ const HotspotRouterToggle = GObject.registerClass(
             this._blockedSection = new PopupMenu.PopupMenuSection();
             this._scrollContent.add_child(this._blockedSection.actor);
 
-            this._scrollView.set_child(this._scrollContent);
-            this._scrollViewItem.add_child(this._scrollView);
+            this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
 
-            this.menu.addMenuItem(this._scrollViewItem);
-
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
+            // Extension Settings (inside scroll so it's always reachable)
             let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
             settingsItem.connect('activate', () => {
                 this._extension.openPreferences();
             });
-            this.menu.addMenuItem(settingsItem);
+            this._scrollContent.add_child(settingsItem);
+
+            this._scrollView.set_child(this._scrollContent);
+            this._scrollViewItem.add_child(this._scrollView);
+
+            this.menu.addMenuItem(this._scrollViewItem);
 
 
             this.connect('clicked', () => {
@@ -245,7 +246,8 @@ const HotspotRouterToggle = GObject.registerClass(
 
                         let blockBtn = new St.Button({
                             style_class: 'button',
-                            child: new St.Label({ text: 'Block' })
+                            child: new St.Label({ text: 'Block' }),
+                            style: 'min-width: 60px;',
                         });
 
                         blockBtn.connect('clicked', () => {
@@ -282,7 +284,8 @@ const HotspotRouterToggle = GObject.registerClass(
 
                         let unblockBtn = new St.Button({
                             style_class: 'button',
-                            child: new St.Label({ text: 'Unblock' })
+                            child: new St.Label({ text: 'Unblock' }),
+                            style: 'min-width: 75px;',
                         });
 
                         unblockBtn.connect('clicked', () => {
