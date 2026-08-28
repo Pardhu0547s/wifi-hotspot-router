@@ -38,35 +38,15 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-            // Scroll view for connected/blocked clients
-            this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-            
-            this._scrollView = new St.ScrollView({
-                style_class: 'vfade',
-                hscrollbar_policy: St.PolicyType.NEVER,
-                vscrollbar_policy: St.PolicyType.AUTOMATIC,
-                x_expand: true,
-                y_expand: true,
-            });
-            // Restrict maximum height to prevent menu overflow
-            this._scrollView.set_style('max-height: 250px;');
-
-            this._scrollContent = new St.BoxLayout({
-                vertical: true,
-                x_expand: true,
-                y_expand: true
-            });
-
+            // Connected clients section
             this._connectedSection = new PopupMenu.PopupMenuSection();
-            this._scrollContent.add_child(this._connectedSection.actor);
+            this.menu.addMenuItem(this._connectedSection);
 
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // Blocked clients section
             this._blockedSection = new PopupMenu.PopupMenuSection();
-            this._scrollContent.add_child(this._blockedSection.actor);
-
-            this._scrollView.set_child(this._scrollContent);
-            this._scrollViewItem.add_child(this._scrollView);
-
-            this.menu.addMenuItem(this._scrollViewItem);
+            this.menu.addMenuItem(this._blockedSection);
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
