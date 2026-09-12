@@ -149,20 +149,24 @@ if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
     exit 1
 fi
 
-# 2. Detect default internet interface and route
-DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
-DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
-
-IS_DEFAULT_WIFI=0
+# 2. Detect if any Wi-Fi interface is actively connected to an external network
+IS_WIFI_CONNECTED=0
+ACTIVE_WIFI_IFACE=""
 for w in "${WIFI_INTERFACES[@]}"; do
-    if [ "$DEFAULT_IFACE" = "$w" ]; then
-        IS_DEFAULT_WIFI=1
+    if $IW_BIN dev "$w" link 2>/dev/null | grep -q "^Connected to" || \
+       ($NMCLI_BIN -t -f DEVICE,STATE dev 2>/dev/null | grep -E "^$w:connected" >/dev/null 2>&1); then
+        IS_WIFI_CONNECTED=1
+        ACTIVE_WIFI_IFACE="$w"
         break
     fi
 done
 
+# Detect default internet interface and route
+DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
+DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
+
 # If NOT repeating an active Wi-Fi connection, clean up previous create_ap instances
-if [ "$IS_DEFAULT_WIFI" -eq 0 ]; then
+if [ "$IS_WIFI_CONNECTED" -eq 0 ]; then
     for w in "${WIFI_INTERFACES[@]}"; do
         $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
         $IW_BIN dev "${w}_ap" del 2>/dev/null || true
@@ -247,14 +251,72 @@ MODE_LABEL="2.4G"
 HT_CAPAB_OPTS='[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
 VHT_CAPAB_OPTS='[SHORT-GI-80][MAX-A-MPDU-LEN-EXP7][RXLDPC][RX-STBC-1][TX-STBC-2BY1]'
 
-if [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 0 ]; then
+# Check if Wi-Fi hardware supports IEEE 802.11ax (HE) AP mode
+HAS_AX=0
+if [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
+    PHY_NAME=$($IW_BIN dev "${WIFI_INTERFACES[0]}" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+    if [ -n "$PHY_NAME" ] && $IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -A 5 "HE Iftypes" | grep -qw "AP"; then
+        HAS_AX=1
+    fi
+fi
+
+if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
     # =========================================================================
-    # SCENARIO A: Ethernet / USB Tethering / Cellular (LAN) is active
+    # SCENARIO B: Connected to Wi-Fi (Wi-Fi Repeater / Hotspot while on Wi-Fi)
+    # Also seamlessly handles VPN active over Wi-Fi (tun*, wg*, tap*)!
+    # CRITICAL: DO NOT DISCONNECT WI-FI!
+    # =========================================================================
+    INTERNET_IFACE="$DEFAULT_IFACE"
+    [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$ACTIVE_WIFI_IFACE"
+    
+    if [ ${#WIFI_INTERFACES[@]} -ge 2 ]; then
+        # Subcase B1: Multiple Wi-Fi adapters available
+        for w in "${WIFI_INTERFACES[@]}"; do
+            if [ "$w" != "$ACTIVE_WIFI_IFACE" ]; then
+                WIFI_IFACE="$w"
+                break
+            fi
+        done
+        [ -z "$WIFI_IFACE" ] && WIFI_IFACE="${WIFI_INTERFACES[0]}"
+
+        if [ "$BAND" = "a" ]; then
+            CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="5G"
+        else
+            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            MODE_LABEL="2.4G"
+        fi
+    else
+        # Subcase B2: Single physical Wi-Fi adapter (STA + AP concurrent mode)
+        WIFI_IFACE="$ACTIVE_WIFI_IFACE"
+        
+        # Read the channel the Wi-Fi card is currently connected to
+        CURRENT_CHAN=$($IW_BIN dev "$WIFI_IFACE" info 2>/dev/null | awk '/channel/{print $2}')
+        if [ -z "$CURRENT_CHAN" ]; then
+            CURRENT_CHAN=$($NMCLI_BIN -t -f active,chan dev wifi 2>/dev/null | grep '^yes:' | cut -d: -f2 | head -n 1)
+        fi
+        [ -z "$CURRENT_CHAN" ] && CURRENT_CHAN=6
+        
+        # Match channel and band to current Wi-Fi connection
+        if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
+            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="Repeater 5G"
+        else
+            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            MODE_LABEL="Repeater 2.4G"
+        fi
+    fi
+
+elif [ -n "$DEFAULT_IFACE" ]; then
+    # =========================================================================
+    # SCENARIO A: Ethernet / USB Tethering / Cellular / Standalone VPN (LAN active)
     # =========================================================================
     WIFI_IFACE="${WIFI_INTERFACES[0]}"
     INTERNET_IFACE="$DEFAULT_IFACE"
     
-    # Wi-Fi radio is not needed for internet, disconnect any idle client connection
+    # Wi-Fi radio is not connected to external network, ensure interface is clean
     $NMCLI_BIN dev disconnect "$WIFI_IFACE" 2>/dev/null || true
     sleep 0.5
     
@@ -270,53 +332,11 @@ if [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 0 ]; then
             CH_5G=36
         fi
         CMD_ARGS+=(--ieee80211ac -c "$CH_5G" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+        [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
         MODE_LABEL="5G"
     else
         CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
-    fi
-
-elif [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 1 ]; then
-    # =========================================================================
-    # SCENARIO B: Connected to Wi-Fi (Wi-Fi Repeater / Hotspot while on Wi-Fi)
-    # =========================================================================
-    INTERNET_IFACE="$DEFAULT_IFACE"
-    
-    if [ ${#WIFI_INTERFACES[@]} -ge 2 ]; then
-        # Subcase B1: Multiple Wi-Fi adapters available
-        for w in "${WIFI_INTERFACES[@]}"; do
-            if [ "$w" != "$DEFAULT_IFACE" ]; then
-                WIFI_IFACE="$w"
-                break
-            fi
-        done
-        if [ "$BAND" = "a" ]; then
-            CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
-            MODE_LABEL="5G"
-        else
-            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
-            MODE_LABEL="2.4G"
-        fi
-    else
-        # Subcase B2: Single physical Wi-Fi adapter (STA + AP concurrent mode)
-        # CRITICAL: DO NOT DISCONNECT WI-FI!
-        WIFI_IFACE="$DEFAULT_IFACE"
-        
-        # Read the channel the Wi-Fi card is currently connected to
-        CURRENT_CHAN=$($IW_BIN dev "$WIFI_IFACE" info 2>/dev/null | awk '/channel/{print $2}')
-        if [ -z "$CURRENT_CHAN" ]; then
-            CURRENT_CHAN=$($NMCLI_BIN -t -f active,chan dev wifi 2>/dev/null | grep '^yes:' | cut -d: -f2 | head -n 1)
-        fi
-        [ -z "$CURRENT_CHAN" ] && CURRENT_CHAN=6
-        
-        # Match channel and band to current Wi-Fi connection
-        if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
-            MODE_LABEL="Repeater 5G"
-        else
-            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
-            MODE_LABEL="Repeater 2.4G"
-        fi
     fi
 
 else
@@ -330,6 +350,7 @@ else
         $NMCLI_BIN dev wifi rescan 2>/dev/null || true
         sleep 1.5
         CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+        [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
         MODE_LABEL="5G"
     else
         CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
@@ -436,30 +457,36 @@ ACTION="$1"
 MAC="$2"
 USER_NAME="$3"
 
+IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
+IP_BIN=$(command -v ip || echo "/usr/bin/ip")
+TC_BIN=$(command -v tc || echo "/usr/sbin/tc")
+IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
+HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
+
 DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
 CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-IFACE=$(ip link show | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
 
 apply_traffic_limits() {
     local USER="$1"
     local LIMITS_FILE="/home/$USER/.config/wifi-hotspot-limits.conf"
-    local AP_IFACE=$(ip link show | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+    local AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
     [ -z "$AP_IFACE" ] && return 0
 
     if [ ! -f "$LIMITS_FILE" ] || [ ! -s "$LIMITS_FILE" ]; then
-        tc qdisc del dev "$AP_IFACE" root 2>/dev/null || true
+        $TC_BIN qdisc del dev "$AP_IFACE" root 2>/dev/null || true
         return 0
     fi
 
     local LEASES_FILE=$(ls /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | head -1)
     [ -z "$LEASES_FILE" ] && return 0
 
-    # Initialize root HTB qdisc and unthrottled line-rate default class (1000 Mbps)
-    tc qdisc add dev "$AP_IFACE" root handle 1: htb default 10 r2q 100 2>/dev/null || true
-    tc class replace dev "$AP_IFACE" parent 1: classid 1:10 htb rate 1000mbit ceil 1000mbit quantum 1500 2>/dev/null || true
+    # Initialize root HTB qdisc and unthrottled line-rate default class (10 Gbps maximum headroom)
+    $TC_BIN qdisc add dev "$AP_IFACE" root handle 1: htb default 10 r2q 100 2>/dev/null || true
+    $TC_BIN class replace dev "$AP_IFACE" parent 1: classid 1:10 htb rate 10000mbit ceil 10000mbit quantum 1500 2>/dev/null || true
 
     # Clear existing filters on root
-    tc filter del dev "$AP_IFACE" parent 1: 2>/dev/null || true
+    $TC_BIN filter del dev "$AP_IFACE" parent 1: 2>/dev/null || true
 
     local CLASS_ID=100
     local ACTIVE_COUNT=0
@@ -470,21 +497,21 @@ apply_traffic_limits() {
             ip=$(grep -i "$mac" "$LEASES_FILE" 2>/dev/null | awk '{print $3}' | head -1)
             if [ -n "$ip" ]; then
                 CLASS_ID=$((CLASS_ID + 1))
-                tc class replace dev "$AP_IFACE" parent 1: classid "1:$CLASS_ID" htb rate "${rate}mbit" ceil "${rate}mbit" quantum 1500 2>/dev/null || true
-                tc filter replace dev "$AP_IFACE" protocol ip parent 1: prio 1 u32 match ip dst "$ip/32" flowid "1:$CLASS_ID" 2>/dev/null || true
+                $TC_BIN class replace dev "$AP_IFACE" parent 1: classid "1:$CLASS_ID" htb rate "${rate}mbit" ceil "${rate}mbit" quantum 1500 2>/dev/null || true
+                $TC_BIN filter replace dev "$AP_IFACE" protocol ip parent 1: prio 1 u32 match ip dst "$ip/32" flowid "1:$CLASS_ID" 2>/dev/null || true
                 ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
             fi
         fi
     done < "$LIMITS_FILE"
 
     if [ "$ACTIVE_COUNT" -eq 0 ]; then
-        tc qdisc del dev "$AP_IFACE" root 2>/dev/null || true
+        $TC_BIN qdisc del dev "$AP_IFACE" root 2>/dev/null || true
     fi
 }
 
 if [ "$ACTION" = "list" ]; then
     if [ -n "$IFACE" ]; then
-        MACS=$(/usr/sbin/iw dev "$IFACE" station dump 2>/dev/null | grep Station | awk '{print $2}')
+        MACS=$($IW_BIN dev "$IFACE" station dump 2>/dev/null | grep Station | awk '{print $2}')
         for m in $MACS; do
             if grep -q -i "$m" "$DENY_FILE" 2>/dev/null; then
                 continue
@@ -496,9 +523,9 @@ if [ "$ACTION" = "list" ]; then
                 HOSTNAME="Unknown Device"
             fi
             [ -z "$IP" ] && IP="Unknown IP"
-            RX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/rx bytes:/{print $3}')
-            TX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/tx bytes:/{print $3}')
-            BITRATE=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk -F':\t' '/tx bitrate:/{print $2}' | awk '{print $1" "$2}')
+            RX=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk '/rx bytes:/{print $3}')
+            TX=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk '/tx bytes:/{print $3}')
+            BITRATE=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk -F':\t' '/tx bitrate:/{print $2}' | awk '{print $1" "$2}')
             [ -z "$RX" ] && RX=0
             [ -z "$TX" ] && TX=0
             [ -z "$BITRATE" ] && BITRATE=""
@@ -535,17 +562,17 @@ elif [ "$ACTION" = "block" ]; then
     HOSTAPD_DENY="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
     awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
     if [ -n "$CTRL_DIR" ]; then
-        hostapd_cli -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1 || true
-        hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
-        hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
+        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1 || true
+        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
+        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
     fi
-    iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-        iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    iptables -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-        iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    $IPTABLES_BIN -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        $IPTABLES_BIN -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 
     if [ -n "$IFACE" ]; then
-        iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
+        $IW_BIN dev "$IFACE" station del "$MAC" 2>/dev/null || true
     fi
 
 elif [ "$ACTION" = "unblock" ]; then
@@ -556,11 +583,11 @@ elif [ "$ACTION" = "unblock" ]; then
     awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
     touch "$HOSTAPD_DENY"
     if [ -n "$CTRL_DIR" ]; then
-        hostapd_cli -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1 || true
+        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1 || true
     fi
 
-    while iptables -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
-    while iptables -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+    while $IPTABLES_BIN -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+    while $IPTABLES_BIN -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
         cat "$DENY_FILE"
@@ -576,6 +603,10 @@ IFACE=$1
 EVENT=$2
 MAC=$3
 
+IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
+IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
+HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
+
 if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
     for USER_DIR in /home/*; do
         [ ! -d "$USER_DIR" ] && continue
@@ -583,11 +614,11 @@ if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
         DENY_FILE="$USER_DIR/.config/wifi-hotspot.deny"
         if [ -f "$DENY_FILE" ] && grep -q -i "$MAC" "$DENY_FILE"; then
             CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-            hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
-            hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
-            iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
-            iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-                iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
+            $IW_BIN dev "$IFACE" station del "$MAC" 2>/dev/null || true
+            $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+                $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
         else
             /usr/local/bin/manage_hotspot_clients apply_limits "" "$USER_NAME" >/dev/null 2>&1 || true
         fi
