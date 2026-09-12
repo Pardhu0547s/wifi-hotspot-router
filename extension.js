@@ -87,7 +87,16 @@ const HotspotRouterToggle = GObject.registerClass(
             // Extension Settings (inside scroll so it's always reachable)
             let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
             settingsItem.connect('activate', () => {
-                this._extension.openPreferences();
+                try {
+                    let p = this._extension.openPreferences();
+                    if (p && typeof p.catch === 'function') {
+                        p.catch(err => {
+                            console.warn(`[HotspotRouter] Note on opening preferences: ${err.message}`);
+                        });
+                    }
+                } catch (e) {
+                    console.warn(`[HotspotRouter] Failed opening preferences: ${e.message}`);
+                }
             });
             this._scrollContent.add_child(settingsItem);
 
@@ -115,7 +124,7 @@ const HotspotRouterToggle = GObject.registerClass(
 
         _readBand() {
             let activeModeFile = '/tmp/wifi-hotspot-active-mode';
-            if (GLib.file_test(activeModeFile, GLib.FileTest.EXISTS)) {
+            if (this.checked && GLib.file_test(activeModeFile, GLib.FileTest.EXISTS)) {
                 try {
                     let [success, content] = GLib.file_get_contents(activeModeFile);
                     if (success) {
@@ -217,7 +226,13 @@ const HotspotRouterToggle = GObject.registerClass(
             let args = shouldActivate
                 ? ['systemctl', 'start', serviceName]
                 : ['systemctl', 'stop', serviceName];
-            this._runCommand(args);
+            this._runCommand(args, () => {
+                this._checkHotspotActiveState();
+                this._refreshBandLabel();
+                if (this.menu.isOpen) {
+                    this._updateDeviceLists();
+                }
+            });
         }
 
         _runCommand(args, callback = null) {
@@ -233,7 +248,7 @@ const HotspotRouterToggle = GObject.registerClass(
                             let [success, stdout] = obj.communicate_utf8_finish(res);
                             callback(success, stdout);
                         } catch (err) {
-
+                            callback(false, null);
                         }
                     });
                 } else {
@@ -241,6 +256,7 @@ const HotspotRouterToggle = GObject.registerClass(
                 }
             } catch (e) {
                 console.error(`[HotspotRouter] Failed executing command: ${e.message}`);
+                if (callback) callback(false, null);
             }
         }
 
@@ -255,9 +271,11 @@ const HotspotRouterToggle = GObject.registerClass(
                 proc.communicate_utf8_async(null, null, (obj, res) => {
                     try {
                         let [success, stdout] = obj.communicate_utf8_finish(res);
-                        let active = success && stdout && stdout.trim() === 'active';
+                        let state = stdout ? stdout.trim() : '';
+                        let active = success && (state === 'active' || state === 'activating');
                         if (this.checked !== active) {
                             this.checked = active;
+                            this._refreshBandLabel();
                         }
                     } catch (err) {
 
