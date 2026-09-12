@@ -81,8 +81,8 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         group.add(clientLimitRow);
 
         const bandModel = new Gtk.StringList();
-        bandModel.append('2.4 GHz — Wider range, more compatible');
-        bandModel.append('5 GHz — Faster speeds, less interference');
+        bandModel.append('2.4 GHz');
+        bandModel.append('5 GHz');
         const bandRow = new Adw.ComboRow({
             title: 'Wi-Fi Band',
             subtitle: 'Frequency band for Ethernet or offline sharing. (When repeating active Wi-Fi, the band matches your Wi-Fi network)',
