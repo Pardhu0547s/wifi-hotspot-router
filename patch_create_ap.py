@@ -48,6 +48,46 @@ if patch2_target in content:
 else:
     print("[!] Patch 2 target not found or already applied")
 
+# Patch 3: Support pure WPA3-Personal (SAE only)
+patch3_target = '''    if [[ "$WPA_VERSION" == "3" ]]; then
+        # Configuring for WPA3 Transition Mode
+        # 80211w must be 1 or Apple Devices will not connect. 
+        # 1 is the only valid value for WPA3 Transition Mode
+        cat << EOF >> $CONFDIR/hostapd.conf
+wpa=2
+wpa_${WPA_KEY_TYPE}=${PASSPHRASE}
+wpa_key_mgmt=WPA-PSK SAE
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+ieee80211w=1
+EOF'''
+
+patch3_replacement = '''    if [[ "$WPA_VERSION" == "3" || "$WPA_VERSION" == "wpa3-mixed" ]]; then
+        # Configuring for WPA3 Transition Mode (WPA2 + WPA3 Mixed)
+        cat << EOF >> $CONFDIR/hostapd.conf
+wpa=2
+wpa_${WPA_KEY_TYPE}=${PASSPHRASE}
+wpa_key_mgmt=WPA-PSK SAE
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+ieee80211w=1
+EOF
+    elif [[ "$WPA_VERSION" == "3-only" || "$WPA_VERSION" == "wpa3" || "$WPA_VERSION" == "sae" ]]; then
+        # Configuring for Pure WPA3-Personal (SAE Only)
+        cat << EOF >> $CONFDIR/hostapd.conf
+wpa=2
+wpa_${WPA_KEY_TYPE}=${PASSPHRASE}
+wpa_key_mgmt=SAE
+rsn_pairwise=CCMP
+ieee80211w=2
+EOF'''
+
+if patch3_target in content:
+    content = content.replace(patch3_target, patch3_replacement, 1)
+    print("[+] Patch 3 applied: WPA3-Personal pure SAE mode support")
+else:
+    print("[!] Patch 3 target not found or already applied")
+
 with open(filepath, 'w', encoding='utf-8') as f:
     f.write(content)
 

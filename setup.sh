@@ -122,7 +122,7 @@ USE_PASSWORD="true"
 PASSWORD="none"
 MAX_CLIENTS="10"
 BAND="bg"
-DNS_PROFILE="cloudflare"
+DNS_PROFILE="system"
 SECURITY_MODE="wpa2"
 ISOLATE_CLIENTS="false"
 IDLE_TIMEOUT="0"
@@ -341,6 +341,7 @@ fi
 echo "$MODE_LABEL" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
 
 # Configure upstream DNS servers based on profile
+DNS_SERVERS=""
 case "$DNS_PROFILE" in
     adguard)
         DNS_SERVERS="94.140.14.14,94.140.15.15"
@@ -351,15 +352,27 @@ case "$DNS_PROFILE" in
     google)
         DNS_SERVERS="8.8.8.8,8.8.4.4"
         ;;
-    *)
+    cloudflare)
         DNS_SERVERS="1.1.1.1,8.8.8.8"
         ;;
+    system|disabled|none|*)
+        DNS_SERVERS=""
+        ;;
 esac
-CMD_ARGS+=(--dhcp-dns "$DNS_SERVERS")
 
-# Optional WPA3 Transition Mode
-if [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
-    CMD_ARGS+=(-w 3)
+if [ -n "$DNS_SERVERS" ]; then
+    CMD_ARGS+=(--dhcp-dns "$DNS_SERVERS")
+fi
+
+# Security Mode Handling
+if [ "$USE_PASSWORD" = "true" ]; then
+    if [ "$SECURITY_MODE" = "wpa3" ] || [ "$SECURITY_MODE" = "wpa3-only" ]; then
+        CMD_ARGS+=(-w 3-only)
+    elif [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
+        CMD_ARGS+=(-w 3)
+    else
+        CMD_ARGS+=(-w 2)
+    fi
 fi
 
 # Optional Client Isolation

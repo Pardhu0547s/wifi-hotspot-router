@@ -19,14 +19,14 @@
       <description>Choose 'bg' for 2.4 GHz or 'a' for 5 GHz</description>
     </key>
     <key name="dns-profile" type="s">
-      <default>'cloudflare'</default>
+      <default>'system'</default>
       <summary>DNS and Ad-Blocking Profile</summary>
-      <description>Options: cloudflare, adguard, quad9, google</description>
+      <description>Options: system, cloudflare, adguard, quad9, google</description>
     </key>
     <key name="security-mode" type="s">
       <default>'wpa2'</default>
       <summary>Security Encryption Mode</summary>
-      <description>Options: wpa2, wpa3-mixed</description>
+      <description>Options: wpa2, wpa3-mixed, wpa3</description>
     </key>
     <key name="isolate-clients" type="b">
       <default>false</default>

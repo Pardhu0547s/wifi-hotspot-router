@@ -46,7 +46,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         group.add(ssidRow);
 
         const cryptoToggleRow = new Adw.SwitchRow({
-            title: 'Enable Password Security (WPA2-PSK)',
+            title: 'Enable Password Security',
             active: config.usePassword
         });
         group.add(cryptoToggleRow);
@@ -65,7 +65,23 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         warningIcon.add_css_class('error');
         passwordRow.add_suffix(warningIcon);
 
+        const secModel = new Gtk.StringList();
+        secModel.append('WPA2-PSK (Standard / Maximum Compatibility)');
+        secModel.append('WPA2 / WPA3-SAE Mixed Mode (Recommended)');
+        secModel.append('WPA3-Personal Only (SAE)');
+        const secProfiles = ['wpa2', 'wpa3-mixed', 'wpa3'];
+        let initialSecIdx = secProfiles.indexOf(config.securityMode);
+        if (initialSecIdx < 0) initialSecIdx = 0;
+        const secRow = new Adw.ComboRow({
+            title: 'Security Encryption Protocol',
+            subtitle: 'Select WPA3 for enhanced security against password guessing on supported devices',
+            model: secModel,
+            selected: initialSecIdx
+        });
+        group.add(secRow);
+
         cryptoToggleRow.bind_property('active', passwordRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
+        cryptoToggleRow.bind_property('active', secRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
 
         const maxClientsAdjustment = new Gtk.Adjustment({
             lower: 1,
@@ -99,31 +115,21 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         page.add(advGroup);
 
         const dnsModel = new Gtk.StringList();
+        dnsModel.append('System / ISP Default (No Custom DNS / Adblock Disabled)');
         dnsModel.append('Cloudflare 1.1.1.1 (Fastest Default)');
         dnsModel.append('AdGuard DNS (Block Ads and Trackers)');
         dnsModel.append('Quad9 9.9.9.9 (Malware and Phishing Filter)');
         dnsModel.append('Google DNS 8.8.8.8');
-        const dnsProfiles = ['cloudflare', 'adguard', 'quad9', 'google'];
+        const dnsProfiles = ['system', 'cloudflare', 'adguard', 'quad9', 'google'];
         let initialDnsIdx = dnsProfiles.indexOf(config.dnsProfile);
         if (initialDnsIdx < 0) initialDnsIdx = 0;
         const dnsRow = new Adw.ComboRow({
             title: 'DNS and Ad-Blocking',
-            subtitle: 'Upstream DNS provider and privacy content filtering for connected devices',
+            subtitle: 'Select upstream DNS provider or disable custom filtering',
             model: dnsModel,
             selected: initialDnsIdx
         });
         advGroup.add(dnsRow);
-
-        const secModel = new Gtk.StringList();
-        secModel.append('WPA2-PSK (Standard / Maximum Compatibility)');
-        secModel.append('WPA2 / WPA3-SAE Mixed (Enhanced Security)');
-        const secRow = new Adw.ComboRow({
-            title: 'Security Encryption Mode',
-            subtitle: 'WPA3 provides advanced protection against password cracking for modern devices',
-            model: secModel,
-            selected: config.securityMode === 'wpa3-mixed' ? 1 : 0
-        });
-        advGroup.add(secRow);
 
         const isolateRow = new Adw.SwitchRow({
             title: 'Client Isolation (Guest Mode)',
@@ -171,8 +177,8 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
             let band = bandRow.selected === 1 ? 'a' : 'bg';
-            let dnsProfile = dnsProfiles[dnsRow.selected] || 'cloudflare';
-            let securityMode = secRow.selected === 1 ? 'wpa3-mixed' : 'wpa2';
+            let dnsProfile = dnsProfiles[dnsRow.selected] || 'system';
+            let securityMode = secProfiles[secRow.selected] || 'wpa2';
             let isolateClients = isolateRow.active;
             const idleValues = [0, 10, 15, 30];
             let idleTimeout = idleValues[idleRow.selected] || 0;
@@ -259,7 +265,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             password: '',
             maxClients: 10,
             band: 'bg',
-            dnsProfile: 'cloudflare',
+            dnsProfile: 'system',
             securityMode: 'wpa2',
             isolateClients: false,
             idleTimeout: 0,
@@ -296,7 +302,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         return config;
     }
 
-    _saveConfig(ssid, usePassword, password, maxClients, band, dnsProfile = 'cloudflare', securityMode = 'wpa2', isolateClients = false, idleTimeout = 0, inhibitSleep = false) {
+    _saveConfig(ssid, usePassword, password, maxClients, band, dnsProfile = 'system', securityMode = 'wpa2', isolateClients = false, idleTimeout = 0, inhibitSleep = false) {
         let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 USE_PASSWORD="${usePassword}"
