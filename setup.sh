@@ -421,6 +421,10 @@ fi
 iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
+# Traffic shaping cleanup
+tc qdisc del dev ap0 root 2>/dev/null || true
+tc qdisc del dev ap1 root 2>/dev/null || true
+
 rm -f /tmp/wifi-hotspot-active-mode 2>/dev/null || true
 EOF_STOP
 sudo chmod +x /usr/local/bin/stop_hotspot
@@ -436,6 +440,48 @@ DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
 CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
 IFACE=$(ip link show | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
 
+apply_traffic_limits() {
+    local USER="$1"
+    local LIMITS_FILE="/home/$USER/.config/wifi-hotspot-limits.conf"
+    local AP_IFACE=$(ip link show | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+    [ -z "$AP_IFACE" ] && return 0
+
+    if [ ! -f "$LIMITS_FILE" ] || [ ! -s "$LIMITS_FILE" ]; then
+        tc qdisc del dev "$AP_IFACE" root 2>/dev/null || true
+        return 0
+    fi
+
+    local LEASES_FILE=$(ls /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | head -1)
+    [ -z "$LEASES_FILE" ] && return 0
+
+    # Initialize root HTB qdisc and unthrottled line-rate default class (1000 Mbps)
+    tc qdisc add dev "$AP_IFACE" root handle 1: htb default 10 r2q 100 2>/dev/null || true
+    tc class replace dev "$AP_IFACE" parent 1: classid 1:10 htb rate 1000mbit ceil 1000mbit quantum 1500 2>/dev/null || true
+
+    # Clear existing filters on root
+    tc filter del dev "$AP_IFACE" parent 1: 2>/dev/null || true
+
+    local CLASS_ID=100
+    local ACTIVE_COUNT=0
+    while IFS='|' read -r mac rate || [ -n "$mac" ]; do
+        mac=$(echo "$mac" | tr '[:upper:]' '[:lower:]' | xargs)
+        rate=$(echo "$rate" | xargs)
+        if [ -n "$mac" ] && [ -n "$rate" ] && [ "$rate" -gt 0 ] 2>/dev/null; then
+            ip=$(grep -i "$mac" "$LEASES_FILE" 2>/dev/null | awk '{print $3}' | head -1)
+            if [ -n "$ip" ]; then
+                CLASS_ID=$((CLASS_ID + 1))
+                tc class replace dev "$AP_IFACE" parent 1: classid "1:$CLASS_ID" htb rate "${rate}mbit" ceil "${rate}mbit" quantum 1500 2>/dev/null || true
+                tc filter replace dev "$AP_IFACE" protocol ip parent 1: prio 1 u32 match ip dst "$ip/32" flowid "1:$CLASS_ID" 2>/dev/null || true
+                ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
+            fi
+        fi
+    done < "$LIMITS_FILE"
+
+    if [ "$ACTIVE_COUNT" -eq 0 ]; then
+        tc qdisc del dev "$AP_IFACE" root 2>/dev/null || true
+    fi
+}
+
 if [ "$ACTION" = "list" ]; then
     if [ -n "$IFACE" ]; then
         MACS=$(/usr/sbin/iw dev "$IFACE" station dump 2>/dev/null | grep Station | awk '{print $2}')
@@ -443,19 +489,41 @@ if [ "$ACTION" = "list" ]; then
             if grep -q -i "$m" "$DENY_FILE" 2>/dev/null; then
                 continue
             fi
-            HOSTNAME=$(cat /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | grep -i "$m" | awk '{print $4}' | head -1)
+            LEASE_LINE=$(cat /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | grep -i "$m" | head -1)
+            IP=$(echo "$LEASE_LINE" | awk '{print $3}')
+            HOSTNAME=$(echo "$LEASE_LINE" | awk '{print $4}')
             if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "*" ]; then
                 HOSTNAME="Unknown Device"
             fi
+            [ -z "$IP" ] && IP="Unknown IP"
             RX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/rx bytes:/{print $3}')
             TX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/tx bytes:/{print $3}')
             BITRATE=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk -F':\t' '/tx bitrate:/{print $2}' | awk '{print $1" "$2}')
             [ -z "$RX" ] && RX=0
             [ -z "$TX" ] && TX=0
             [ -z "$BITRATE" ] && BITRATE=""
-            echo "$m|$HOSTNAME|$RX|$TX|$BITRATE"
+            echo "$m|$HOSTNAME|$RX|$TX|$BITRATE|$IP"
         done
     fi
+elif [ "$ACTION" = "set_limit" ]; then
+    RATE="$4"
+    LIMITS_FILE="/home/$USER_NAME/.config/wifi-hotspot-limits.conf"
+    mkdir -p "/home/$USER_NAME/.config"
+    touch "$LIMITS_FILE"
+    if [ -f "$LIMITS_FILE" ]; then
+        sed -i "/^$MAC|/Id" "$LIMITS_FILE"
+    fi
+    if [ -n "$RATE" ] && [ "$RATE" -gt 0 ] 2>/dev/null; then
+        echo "$MAC|$RATE" >> "$LIMITS_FILE"
+    fi
+    apply_traffic_limits "$USER_NAME"
+elif [ "$ACTION" = "get_limits" ]; then
+    LIMITS_FILE="/home/$USER_NAME/.config/wifi-hotspot-limits.conf"
+    if [ -f "$LIMITS_FILE" ]; then
+        cat "$LIMITS_FILE"
+    fi
+elif [ "$ACTION" = "apply_limits" ]; then
+    apply_traffic_limits "$USER_NAME"
 elif [ "$ACTION" = "block" ]; then
     HOSTNAME="$4"
     [ -z "$HOSTNAME" ] && HOSTNAME="Unknown Device"
@@ -509,16 +577,19 @@ EVENT=$2
 MAC=$3
 
 if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
-    for DENY_FILE in /home/*/.config/wifi-hotspot.deny; do
-        if [ -f "$DENY_FILE" ]; then
-            if grep -q -i "$MAC" "$DENY_FILE"; then
-                CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-                hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
-                hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
-                iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
-                iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-                    iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-            fi
+    for USER_DIR in /home/*; do
+        [ ! -d "$USER_DIR" ] && continue
+        USER_NAME=$(basename "$USER_DIR")
+        DENY_FILE="$USER_DIR/.config/wifi-hotspot.deny"
+        if [ -f "$DENY_FILE" ] && grep -q -i "$MAC" "$DENY_FILE"; then
+            CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
+            hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
+            hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
+            iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
+            iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+                iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+        else
+            /usr/local/bin/manage_hotspot_clients apply_limits "" "$USER_NAME" >/dev/null 2>&1 || true
         fi
     done
 fi
@@ -536,7 +607,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/start_hotspot %i
-ExecStartPost=/bin/bash -c 'sleep 2; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
+ExecStartPost=/bin/bash -c 'sleep 2; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; /usr/local/bin/manage_hotspot_clients apply_limits "" %i 2>/dev/null || true; CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
 ExecStop=/usr/local/bin/stop_hotspot %i
 RemainAfterExit=yes
 

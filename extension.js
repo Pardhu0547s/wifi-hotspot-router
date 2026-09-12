@@ -330,6 +330,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         let rxBytes = parts.length > 2 ? parseInt(parts[2], 10) || 0 : 0;
                         let txBytes = parts.length > 3 ? parseInt(parts[3], 10) || 0 : 0;
                         let bitrate = parts.length > 4 ? parts[4] : '';
+                        let ip = parts.length > 5 ? parts[5] : '';
 
                         let item = new PopupMenu.PopupMenuItem('');
                         let infoBox = new St.BoxLayout({ vertical: true, x_expand: true });
@@ -337,21 +338,21 @@ const HotspotRouterToggle = GObject.registerClass(
                         infoBox.add_child(nameLabel);
 
                         let totalBytes = rxBytes + txBytes;
-                        if (totalBytes > 0 || bitrate) {
-                            let formatBytes = (b) => {
-                                if (!b || b <= 0) return '0 B';
-                                let units = ['B', 'KB', 'MB', 'GB', 'TB'];
-                                let i = Math.floor(Math.log(b) / Math.log(1024));
-                                return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
-                            };
-                            let subText = `${formatBytes(totalBytes)} transferred`;
-                            if (bitrate) subText += ` • ${bitrate}`;
-                            let subLabel = new St.Label({
-                                text: subText,
-                                style: 'font-size: 0.82em; opacity: 0.7;'
-                            });
-                            infoBox.add_child(subLabel);
-                        }
+                        let formatBytes = (b) => {
+                            if (!b || b <= 0) return '0 B';
+                            let units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                            let i = Math.floor(Math.log(b) / Math.log(1024));
+                            return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+                        };
+                        let subText = '';
+                        if (ip && ip !== 'Unknown IP') subText += `${ip} • `;
+                        subText += `${formatBytes(totalBytes)} transferred`;
+                        if (bitrate) subText += ` • ${bitrate}`;
+                        let subLabel = new St.Label({
+                            text: subText,
+                            style: 'font-size: 0.82em; opacity: 0.7;'
+                        });
+                        infoBox.add_child(subLabel);
                         item.add_child(infoBox);
 
                         let blockBtn = new St.Button({
