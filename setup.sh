@@ -106,7 +106,6 @@ echo -e "\n=== Phase 3: Installing Universal Network Engine (start_hotspot & sto
 # start_hotspot
 sudo tee /usr/local/bin/start_hotspot > /dev/null <<\EOF_START
 #!/bin/bash
-set -eo pipefail
 
 USER_NAME="$1"
 if [ -z "$USER_NAME" ]; then
@@ -279,8 +278,13 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         done
         [ -z "$WIFI_IFACE" ] && WIFI_IFACE="${WIFI_INTERFACES[0]}"
 
-        if [ "$BAND" = "a" ]; then
-            CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+        # Check if 5GHz transmission is permitted (free of "no IR")
+        ALLOWED_5G_CHAN=""
+        if [ -n "$PHY_NAME" ]; then
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+        fi
+        if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="5G"
         else
@@ -321,19 +325,21 @@ elif [ -n "$DEFAULT_IFACE" ]; then
     sleep 0.5
     
     if [ "$BAND" = "a" ]; then
-        # Trigger LAR rescan to refresh self-managed regulatory domain
-        $NMCLI_BIN dev wifi rescan 2>/dev/null || true
-        sleep 1.5
-        
-        CH_5G=149
-        if $IW_BIN phy 2>/dev/null | grep -q "5745.0 MHz \[149\] (22.0 dBm)"; then
-            CH_5G=149
-        elif $IW_BIN phy 2>/dev/null | grep "5180.0 MHz \[36\]" | grep -qv "no IR"; then
-            CH_5G=36
+        # Check if 5GHz transmission is permitted (free of "no IR")
+        ALLOWED_5G_CHAN=""
+        if [ -n "$PHY_NAME" ]; then
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
         fi
-        CMD_ARGS+=(--ieee80211ac -c "$CH_5G" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
-        [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-        MODE_LABEL="5G"
+        if [ -n "$ALLOWED_5G_CHAN" ]; then
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="5G"
+        else
+            echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter without active Wi-Fi association."
+            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel 6)..."
+            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            MODE_LABEL="2.4G (5G NO-IR fallback)"
+        fi
     else
         CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
@@ -347,11 +353,20 @@ else
     INTERNET_IFACE="$WIFI_IFACE"
     
     if [ "$BAND" = "a" ]; then
-        $NMCLI_BIN dev wifi rescan 2>/dev/null || true
-        sleep 1.5
-        CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
-        [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-        MODE_LABEL="5G"
+        ALLOWED_5G_CHAN=""
+        if [ -n "$PHY_NAME" ]; then
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+        fi
+        if [ -n "$ALLOWED_5G_CHAN" ]; then
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="5G"
+        else
+            echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter."
+            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel 6)..."
+            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            MODE_LABEL="2.4G (5G NO-IR fallback)"
+        fi
     else
         CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
@@ -407,7 +422,40 @@ if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none"
     CMD_ARGS+=("$PASSWORD")
 fi
 
-exec $CREATE_AP_BIN "${CMD_ARGS[@]}"
+# Clean up any leftover virtual interface before launch
+$IW_BIN dev ap0 del 2>/dev/null || true
+
+# Execute create_ap with resilient auto-fallback
+$CREATE_AP_BIN "${CMD_ARGS[@]}"
+EXIT_CODE=$?
+
+# If create_ap exited with error and 5GHz was requested, automatically recover on 2.4GHz!
+if [ $EXIT_CODE -ne 0 ] && [ "$BAND" = "a" ]; then
+    echo "[!] 5GHz startup returned exit code $EXIT_CODE. Automatically recovering on 2.4GHz..."
+    echo "2.4G (Auto-Fallback)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
+    $IW_BIN dev ap0 del 2>/dev/null || true
+    sleep 1
+
+    FALLBACK_ARGS=(--ieee80211n -c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+    [ -n "$DNS_SERVERS" ] && FALLBACK_ARGS+=(--dhcp-dns "$DNS_SERVERS")
+    if [ "$USE_PASSWORD" = "true" ]; then
+        if [ "$SECURITY_MODE" = "wpa3" ] || [ "$SECURITY_MODE" = "wpa3-only" ]; then
+            FALLBACK_ARGS+=(-w 3-only)
+        elif [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
+            FALLBACK_ARGS+=(-w 3)
+        else
+            FALLBACK_ARGS+=(-w 2)
+        fi
+    fi
+    [ "$ISOLATE_CLIENTS" = "true" ] && FALLBACK_ARGS+=(--isolate-clients)
+    FALLBACK_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
+    if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
+        FALLBACK_ARGS+=("$PASSWORD")
+    fi
+    exec $CREATE_AP_BIN "${FALLBACK_ARGS[@]}"
+fi
+
+exit $EXIT_CODE
 EOF_START
 sudo chmod +x /usr/local/bin/start_hotspot
 
@@ -688,14 +736,12 @@ sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<
 unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1;interface-name:vmnet*
 EOF_NM
 
-sudo tee /etc/udev/rules.d/99-wifi-hotspot-cleanup.rules > /dev/null <<\EOF_UDEV
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="*_ap", RUN+="/bin/bash -c 'STATUS=$(systemctl show -p ActiveState --value wifi-hotspot@*.service 2>/dev/null); if [ \"$STATUS\" != \"active\" ] && [ \"$STATUS\" != \"activating\" ]; then iw dev %k del 2>/dev/null || true; fi'"
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="ap[0-9]*", RUN+="/bin/bash -c 'STATUS=$(systemctl show -p ActiveState --value wifi-hotspot@*.service 2>/dev/null); if [ \"$STATUS\" != \"active\" ] && [ \"$STATUS\" != \"activating\" ]; then iw dev %k del 2>/dev/null || true; fi'"
-EOF_UDEV
+# Ensure no conflicting udev cleanup rule interferes with interface creation
+sudo rm -f /etc/udev/rules.d/99-wifi-hotspot-cleanup.rules 2>/dev/null || true
 sudo udevadm control --reload-rules 2>/dev/null || true
 
 sudo systemctl reload NetworkManager 2>/dev/null || sudo systemctl restart NetworkManager 2>/dev/null || true
-echo "[+] NetworkManager & udev rules installed."
+echo "[+] NetworkManager unmanaged configuration installed."
 
 echo -e "\n=== Phase 7: Deploying GNOME Extension ==="
 mkdir -p "$REAL_HOME/.local/share/gnome-shell/extensions"
