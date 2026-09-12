@@ -87,16 +87,7 @@ const HotspotRouterToggle = GObject.registerClass(
             // Extension Settings (inside scroll so it's always reachable)
             let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
             settingsItem.connect('activate', () => {
-                try {
-                    let p = this._extension.openPreferences();
-                    if (p && typeof p.catch === 'function') {
-                        p.catch(err => {
-                            console.warn(`[HotspotRouter] Note on opening preferences: ${err.message}`);
-                        });
-                    }
-                } catch (e) {
-                    console.warn(`[HotspotRouter] Failed opening preferences: ${e.message}`);
-                }
+                this._openExtensionPreferences();
             });
             this._scrollContent.add_child(settingsItem);
 
@@ -218,6 +209,34 @@ const HotspotRouterToggle = GObject.registerClass(
                     if (this._qrSeparator) this._qrSeparator.hide();
                 }
             });
+        }
+
+        async _openExtensionPreferences() {
+            try {
+                await this._extension.openPreferences();
+            } catch (err) {
+                let msg = err ? (err.message || String(err)) : '';
+                console.warn(`[HotspotRouter] Note on opening preferences: ${msg}`);
+                if (msg.includes('Already showing a prefs dialog')) {
+                    try {
+                        let proc = new Gio.Subprocess({
+                            argv: ['pkill', '-f', 'org.gnome.Shell.Extensions'],
+                            flags: Gio.SubprocessFlags.NONE
+                        });
+                        proc.init(null);
+                        proc.wait_check_async(null, () => {
+                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                                try {
+                                    this._extension.openPreferences().catch(() => {});
+                                } catch (e) {}
+                                return GLib.SOURCE_REMOVE;
+                            });
+                        });
+                    } catch (killErr) {
+                        console.error(`[HotspotRouter] Prefs recovery failed: ${killErr.message}`);
+                    }
+                }
+            }
         }
 
         _handleToggleEvent(shouldActivate) {

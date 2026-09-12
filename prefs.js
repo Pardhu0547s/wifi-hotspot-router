@@ -158,28 +158,14 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         maxClientsAdjustment.connect('value-changed', markChanged);
         bandRow.connect('notify::selected', markChanged);
 
-        window.connect('close-request', (win) => {
+        window.connect('close-request', () => {
             if (hasUnsavedChanges) {
-                let dialog = new Adw.MessageDialog({
-                    heading: 'Unsaved Changes',
-                    body: 'You have modified your hotspot settings. Do you want to save them and restart the hotspot, or discard the changes?',
-                    transient_for: win
-                });
-                dialog.add_response('discard', 'Discard');
-                dialog.add_response('save', 'Save & Apply');
-                dialog.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE);
-                dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
-
-                dialog.connect('response', (dlg, response) => {
-                    if (response === 'save') {
-                        triggerSave();
-                    }
-                    hasUnsavedChanges = false;
-                    win.close();
-                });
-
-                dialog.present();
-                return true;
+                let usePass = cryptoToggleRow.active;
+                let pass = passwordRow.get_text() || '';
+                let passValid = !usePass || (pass.length >= 8);
+                if (passValid) {
+                    triggerSave();
+                }
             }
             return false;
         });
