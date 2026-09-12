@@ -39,8 +39,8 @@ else
     fi
 fi
 
-echo "[+] Patching /usr/bin/create_ap for Client Limits and MAC Filter..."
-sudo sed -i '/ap_isolate=\$ISOLATE_CLIENTS/{n;s/EOF/EOF\n\[\[ -n "\$MAX_NUM_STA" \]\] \&\& echo "max_num_sta=\$MAX_NUM_STA" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "macaddr_acl=0" >> \$CONFDIR\/hostapd.conf\n\[\[ -n "\$DENY_MAC_FILE" \]\] \&\& echo "deny_mac_file=\$DENY_MAC_FILE" >> \$CONFDIR\/hostapd.conf/}' /usr/bin/create_ap
+echo "[+] Patching /usr/bin/create_ap for Client Limits, MAC Filter, and 5GHz AP support..."
+sudo python3 "$SOURCE_DIR/patch_create_ap.py"
 echo "[+] /usr/bin/create_ap successfully patched."
 
 echo -e "\n=== Phase 3: Installing start_hotspot and stop_hotspot ==="
@@ -60,6 +60,7 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="none"
 MAX_CLIENTS="10"
+BAND="bg"
 
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
@@ -113,51 +114,28 @@ done < "$DENY_MAC_FILE"
 /usr/sbin/sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
 /usr/sbin/sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
 
-# Step 5: Launch Hotspot with maximum speed settings
+# Step 4.5: Set regulatory domain to IN (India) to unlock 5 GHz AP channels
+/usr/sbin/iw reg set IN 2>/dev/null || true
+sleep 0.5
+
+# Step 5: Disconnect Wi-Fi to free the radio for AP mode
+/usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
+sleep 1
+
+# Step 6: Launch Hotspot with band-specific settings
 CMD_ARGS=()
 
 # Enable 802.11n High Throughput mode
 CMD_ARGS+=(--ieee80211n)
 
-# Auto-detect current Wi-Fi channel to apply safe capabilities and prevent create_ap multi-channel bugs
-CURRENT_CHAN=$(/usr/sbin/iw dev "$WIFI_IFACE" info 2>/dev/null | grep 'channel' | awk '{print $2}')
-IS_DFS=0
-if [ -n "$CURRENT_CHAN" ] && [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ] 2>/dev/null; then
-    IS_DFS=1
-fi
-
-# Check if we have a non-Wi-Fi internet connection (LAN/Ethernet)
-HAS_LAN=0
-LAN_IFACE=$(/usr/bin/ip route | grep '^default' | awk '{print $5}' | head -n 1)
-if [ -n "$LAN_IFACE" ] && [ "$LAN_IFACE" != "$WIFI_IFACE" ]; then
-    HAS_LAN=1
-fi
-
-if [ "$HAS_LAN" -eq 1 ] && [ -n "$CURRENT_CHAN" ]; then
-    # We have Ethernet for internet, but Wi-Fi is connected.
-    # Intel cards often fail to create an AP on 5GHz channels due to regulatory NO-IR 
-    # (PASSIVE-SCAN) rules. We must disconnect Wi-Fi to free the radio for 2.4GHz.
-    /usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
-    sleep 1
-    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
-elif [ "$IS_DFS" -eq 1 ]; then
-    # On DFS channel with Wi-Fi-only internet: Intel #channels<=1 restriction
-    # means we can't use a different channel for the AP. We must temporarily
-    # disconnect Wi-Fi so the card is free, then start hotspot on 2.4GHz ch 6.
-    # create_ap will handle internet sharing once it takes over the interface.
-    WIFI_CONNECTION=$(/usr/bin/nmcli -t -f NAME,DEVICE con show --active | grep ":${WIFI_IFACE}$" | head -1 | cut -d: -f1)
-    /usr/bin/nmcli dev disconnect "$WIFI_IFACE" 2>/dev/null || true
-    sleep 1
-    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
-elif [ -z "$CURRENT_CHAN" ]; then
-    # Not connected to Wi-Fi. Safe to use channel 6.
-    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
-elif [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-    # On non-DFS 5GHz, match channel safely
-    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 5 --ieee80211ac --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+if [ "$BAND" = "a" ]; then
+    # 5 GHz mode: channel 149 (UNII-3, 5745 MHz), active transmit unrestricted in India
+    CMD_ARGS+=(--ieee80211ac)
+    CMD_ARGS+=(-c 149 --freq-band 5)
+    CMD_ARGS+=(--ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
 else
-    # On 2.4GHz, match channel
-    CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab '')
+    # 2.4 GHz mode: channel 6
+    CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
 fi
 
 # Dynamically detect active internet interface (default gateway route)
@@ -383,6 +361,7 @@ SSID="hotspot"
 USE_PASSWORD="true"
 PASSWORD="12345678"
 MAX_CLIENTS="10"
+BAND="bg"
 EOF
     chmod 600 "$CONFIG_DEST"
 fi

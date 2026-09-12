@@ -11,17 +11,18 @@ import Clutter from 'gi://Clutter';
 const HotspotRouterToggle = GObject.registerClass(
     class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
         _init(extension) {
+            this._extension = extension;
+            this._timeoutId = 0;
+            this._bandLabel = this._readBand();
+
             super._init({
-                title: 'Hotspot',
+                title: `Hotspot (${this._bandLabel})`,
                 iconName: 'network-wireless-hotspot-symbolic',
                 toggleMode: true,
             });
 
-            this._extension = extension;
-            this._timeoutId = 0;
 
-
-            this.menu.setHeader('network-wireless-hotspot-symbolic', 'Hotspot Devices', 'Manage connected clients');
+            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
 
             // Create a wrapper item for the scroll view
             this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
@@ -105,10 +106,41 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
+                    this._refreshBandLabel();
                     this._updateQRCode();
                     this._updateDeviceLists();
                 }
             });
+        }
+
+        _readBand() {
+            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+            let band = 'bg';
+            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+                try {
+                    let [success, content] = GLib.file_get_contents(path);
+                    if (success) {
+                        let decoder = new TextDecoder('utf-8');
+                        let lines = decoder.decode(content).split('\n');
+                        for (let line of lines) {
+                            let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
+                            if (match && match[1] === 'BAND') {
+                                band = match[2];
+                            }
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            return band === 'a' ? '5G' : '2.4G';
+        }
+
+        _refreshBandLabel() {
+            let newLabel = this._readBand();
+            if (this._bandLabel !== newLabel) {
+                this._bandLabel = newLabel;
+                this.title = `Hotspot (${this._bandLabel})`;
+                this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
+            }
         }
 
         _updateQRCode() {

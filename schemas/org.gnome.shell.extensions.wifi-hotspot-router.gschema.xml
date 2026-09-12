@@ -13,5 +13,10 @@
       <default>10</default>
       <summary>Maximum Client Connections Limit</summary>
     </key>
+    <key name="hotspot-band" type="s">
+      <default>'bg'</default>
+      <summary>Wi-Fi Band Selection</summary>
+      <description>Choose 'bg' for 2.4 GHz or 'a' for 5 GHz</description>
+    </key>
   </schema>
 </schemalist>
