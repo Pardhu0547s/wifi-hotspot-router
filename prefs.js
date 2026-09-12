@@ -92,6 +92,67 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         group.add(bandRow);
 
 
+        const advGroup = new Adw.PreferencesGroup({
+            title: 'Advanced Router and Power Settings',
+            description: 'Optional performance, privacy, and power management options'
+        });
+        page.add(advGroup);
+
+        const dnsModel = new Gtk.StringList();
+        dnsModel.append('Cloudflare 1.1.1.1 (Fastest Default)');
+        dnsModel.append('AdGuard DNS (Block Ads and Trackers)');
+        dnsModel.append('Quad9 9.9.9.9 (Malware and Phishing Filter)');
+        dnsModel.append('Google DNS 8.8.8.8');
+        const dnsProfiles = ['cloudflare', 'adguard', 'quad9', 'google'];
+        let initialDnsIdx = dnsProfiles.indexOf(config.dnsProfile);
+        if (initialDnsIdx < 0) initialDnsIdx = 0;
+        const dnsRow = new Adw.ComboRow({
+            title: 'DNS and Ad-Blocking',
+            subtitle: 'Upstream DNS provider and privacy content filtering for connected devices',
+            model: dnsModel,
+            selected: initialDnsIdx
+        });
+        advGroup.add(dnsRow);
+
+        const secModel = new Gtk.StringList();
+        secModel.append('WPA2-PSK (Standard / Maximum Compatibility)');
+        secModel.append('WPA2 / WPA3-SAE Mixed (Enhanced Security)');
+        const secRow = new Adw.ComboRow({
+            title: 'Security Encryption Mode',
+            subtitle: 'WPA3 provides advanced protection against password cracking for modern devices',
+            model: secModel,
+            selected: config.securityMode === 'wpa3-mixed' ? 1 : 0
+        });
+        advGroup.add(secRow);
+
+        const isolateRow = new Adw.SwitchRow({
+            title: 'Client Isolation (Guest Mode)',
+            subtitle: 'Prevent connected devices from communicating directly with each other or host services',
+            active: config.isolateClients
+        });
+        advGroup.add(isolateRow);
+
+        const idleModel = new Gtk.StringList();
+        idleModel.append('Disabled (Always On)');
+        idleModel.append('10 Minutes');
+        idleModel.append('15 Minutes');
+        idleModel.append('30 Minutes');
+        let initialIdleIdx = config.idleTimeout === 10 ? 1 : (config.idleTimeout === 15 ? 2 : (config.idleTimeout === 30 ? 3 : 0));
+        const idleRow = new Adw.ComboRow({
+            title: 'Auto-Turn Off When Idle',
+            subtitle: 'Automatically disable hotspot when no devices are connected to save battery',
+            model: idleModel,
+            selected: initialIdleIdx
+        });
+        advGroup.add(idleRow);
+
+        const sleepRow = new Adw.SwitchRow({
+            title: 'Prevent Laptop Sleep While Active',
+            subtitle: 'Keep system awake while clients are actively connected to prevent disconnections',
+            active: config.inhibitSleep
+        });
+        advGroup.add(sleepRow);
+
         const donationsRow = new Adw.ActionRow({
             title: 'Support This Project',
             subtitle: 'Donate or star the repository to support development'
@@ -102,7 +163,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             valign: Gtk.Align.CENTER
         });
         donationsRow.add_suffix(linkButton);
-        group.add(donationsRow);
+        advGroup.add(donationsRow);
 
         const triggerSave = () => {
             let ssid = ssidRow.get_text() || 'hotspot';
@@ -110,6 +171,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
             let band = bandRow.selected === 1 ? 'a' : 'bg';
+            let dnsProfile = dnsProfiles[dnsRow.selected] || 'cloudflare';
+            let securityMode = secRow.selected === 1 ? 'wpa3-mixed' : 'wpa2';
+            let isolateClients = isolateRow.active;
+            const idleValues = [0, 10, 15, 30];
+            let idleTimeout = idleValues[idleRow.selected] || 0;
+            let inhibitSleep = sleepRow.active;
 
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
@@ -119,8 +186,13 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             settings.set_boolean('use-password', usePass);
             settings.set_int('max-clients', maxCl);
             settings.set_string('hotspot-band', band);
+            settings.set_string('dns-profile', dnsProfile);
+            settings.set_string('security-mode', securityMode);
+            settings.set_boolean('isolate-clients', isolateClients);
+            settings.set_int('idle-timeout', idleTimeout);
+            settings.set_boolean('inhibit-sleep', inhibitSleep);
 
-            this._saveConfig(ssid, usePass, pass, maxCl, band);
+            this._saveConfig(ssid, usePass, pass, maxCl, band, dnsProfile, securityMode, isolateClients, idleTimeout, inhibitSleep);
 
             hasUnsavedChanges = false;
             saveRow.visible = false;
@@ -157,6 +229,11 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         passwordRow.connect('changed', markChanged);
         maxClientsAdjustment.connect('value-changed', markChanged);
         bandRow.connect('notify::selected', markChanged);
+        dnsRow.connect('notify::selected', markChanged);
+        secRow.connect('notify::selected', markChanged);
+        isolateRow.connect('notify::active', markChanged);
+        idleRow.connect('notify::selected', markChanged);
+        sleepRow.connect('notify::active', markChanged);
 
         window.connect('close-request', () => {
             if (hasUnsavedChanges) {
@@ -181,7 +258,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             usePassword: true,
             password: '',
             maxClients: 10,
-            band: 'bg'
+            band: 'bg',
+            dnsProfile: 'cloudflare',
+            securityMode: 'wpa2',
+            isolateClients: false,
+            idleTimeout: 0,
+            inhibitSleep: false
         };
 
         if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
@@ -199,6 +281,11 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                             else if (key === 'PASSWORD') config.password = value;
                             else if (key === 'MAX_CLIENTS') config.maxClients = parseInt(value, 10) || 10;
                             else if (key === 'BAND') config.band = value;
+                            else if (key === 'DNS_PROFILE') config.dnsProfile = value;
+                            else if (key === 'SECURITY_MODE') config.securityMode = value;
+                            else if (key === 'ISOLATE_CLIENTS') config.isolateClients = (value === 'true');
+                            else if (key === 'IDLE_TIMEOUT') config.idleTimeout = parseInt(value, 10) || 0;
+                            else if (key === 'INHIBIT_SLEEP') config.inhibitSleep = (value === 'true');
                         }
                     }
                 }
@@ -209,13 +296,18 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         return config;
     }
 
-    _saveConfig(ssid, usePassword, password, maxClients, band) {
+    _saveConfig(ssid, usePassword, password, maxClients, band, dnsProfile = 'cloudflare', securityMode = 'wpa2', isolateClients = false, idleTimeout = 0, inhibitSleep = false) {
         let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 USE_PASSWORD="${usePassword}"
 PASSWORD="${password}"
 MAX_CLIENTS="${maxClients}"
 BAND="${band}"
+DNS_PROFILE="${dnsProfile}"
+SECURITY_MODE="${securityMode}"
+ISOLATE_CLIENTS="${isolateClients}"
+IDLE_TIMEOUT="${idleTimeout}"
+INHIBIT_SLEEP="${inhibitSleep}"
 `;
         try {
             GLib.file_set_contents(path, output);

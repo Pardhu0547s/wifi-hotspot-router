@@ -122,6 +122,11 @@ USE_PASSWORD="true"
 PASSWORD="none"
 MAX_CLIENTS="10"
 BAND="bg"
+DNS_PROFILE="cloudflare"
+SECURITY_MODE="wpa2"
+ISOLATE_CLIENTS="false"
+IDLE_TIMEOUT="0"
+INHIBIT_SLEEP="false"
 
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
@@ -335,8 +340,33 @@ fi
 # Store active mode label for GNOME Shell UI
 echo "$MODE_LABEL" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
 
-# Configure upstream DNS servers for clients
-CMD_ARGS+=(--dhcp-dns 1.1.1.1,8.8.8.8)
+# Configure upstream DNS servers based on profile
+case "$DNS_PROFILE" in
+    adguard)
+        DNS_SERVERS="94.140.14.14,94.140.15.15"
+        ;;
+    quad9)
+        DNS_SERVERS="9.9.9.9,149.112.112.112"
+        ;;
+    google)
+        DNS_SERVERS="8.8.8.8,8.8.4.4"
+        ;;
+    *)
+        DNS_SERVERS="1.1.1.1,8.8.8.8"
+        ;;
+esac
+CMD_ARGS+=(--dhcp-dns "$DNS_SERVERS")
+
+# Optional WPA3 Transition Mode
+if [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
+    CMD_ARGS+=(-w 3)
+fi
+
+# Optional Client Isolation
+if [ "$ISOLATE_CLIENTS" = "true" ]; then
+    CMD_ARGS+=(--isolate-clients)
+fi
+
 CMD_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
 
 if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
@@ -404,7 +434,13 @@ if [ "$ACTION" = "list" ]; then
             if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "*" ]; then
                 HOSTNAME="Unknown Device"
             fi
-            echo "$m|$HOSTNAME"
+            RX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/rx bytes:/{print $3}')
+            TX=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk '/tx bytes:/{print $3}')
+            BITRATE=$(/usr/sbin/iw dev "$IFACE" station get "$m" 2>/dev/null | awk -F':\t' '/tx bitrate:/{print $2}' | awk '{print $1" "$2}')
+            [ -z "$RX" ] && RX=0
+            [ -z "$TX" ] && TX=0
+            [ -z "$BITRATE" ] && BITRATE=""
+            echo "$m|$HOSTNAME|$RX|$TX|$BITRATE"
         done
     fi
 elif [ "$ACTION" = "block" ]; then

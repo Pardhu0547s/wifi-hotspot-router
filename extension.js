@@ -13,6 +13,9 @@ const HotspotRouterToggle = GObject.registerClass(
         _init(extension) {
             this._extension = extension;
             this._timeoutId = 0;
+            this._clientCount = 0;
+            this._idleSeconds = 0;
+            this._inhibitCookie = 0;
             this._bandLabel = this._readBand();
 
             super._init({
@@ -315,20 +318,47 @@ const HotspotRouterToggle = GObject.registerClass(
                 header.label.add_style_class_name('bold');
                 this._connectedSection.addMenuItem(header);
 
+                let activeCount = 0;
                 if (success && stdout && stdout.trim()) {
                     let lines = stdout.trim().split('\n');
                     for (let line of lines) {
                         if (!line) continue;
+                        activeCount++;
                         let parts = line.split('|');
                         let mac = parts[0];
                         let hostname = parts.length > 1 ? parts[1] : mac;
+                        let rxBytes = parts.length > 2 ? parseInt(parts[2], 10) || 0 : 0;
+                        let txBytes = parts.length > 3 ? parseInt(parts[3], 10) || 0 : 0;
+                        let bitrate = parts.length > 4 ? parts[4] : '';
 
-                        let item = new PopupMenu.PopupMenuItem(hostname);
+                        let item = new PopupMenu.PopupMenuItem('');
+                        let infoBox = new St.BoxLayout({ vertical: true, x_expand: true });
+                        let nameLabel = new St.Label({ text: hostname, style: 'font-weight: 500;' });
+                        infoBox.add_child(nameLabel);
+
+                        let totalBytes = rxBytes + txBytes;
+                        if (totalBytes > 0 || bitrate) {
+                            let formatBytes = (b) => {
+                                if (!b || b <= 0) return '0 B';
+                                let units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                                let i = Math.floor(Math.log(b) / Math.log(1024));
+                                return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+                            };
+                            let subText = `${formatBytes(totalBytes)} transferred`;
+                            if (bitrate) subText += ` • ${bitrate}`;
+                            let subLabel = new St.Label({
+                                text: subText,
+                                style: 'font-size: 0.82em; opacity: 0.7;'
+                            });
+                            infoBox.add_child(subLabel);
+                        }
+                        item.add_child(infoBox);
 
                         let blockBtn = new St.Button({
                             style_class: 'button',
                             child: new St.Label({ text: 'Block' }),
                             style: 'min-width: 60px;',
+                            y_align: Clutter.ActorAlign.CENTER,
                         });
 
                         blockBtn.connect('clicked', () => {
@@ -343,6 +373,7 @@ const HotspotRouterToggle = GObject.registerClass(
                     let item = new PopupMenu.PopupMenuItem('No devices connected', { reactive: false });
                     this._connectedSection.addMenuItem(item);
                 }
+                this._clientCount = activeCount;
             });
 
 
@@ -384,6 +415,27 @@ const HotspotRouterToggle = GObject.registerClass(
             });
         }
 
+        _readAdvancedConfig() {
+            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+            let config = { idleTimeout: 0, inhibitSleep: false };
+            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+                try {
+                    let [success, content] = GLib.file_get_contents(path);
+                    if (success) {
+                        let lines = (new TextDecoder('utf-8')).decode(content).split('\n');
+                        for (let line of lines) {
+                            let m = line.match(/^(\w+)\s*=\s*"(.*)"$/);
+                            if (m) {
+                                if (m[1] === 'IDLE_TIMEOUT') config.idleTimeout = parseInt(m[2], 10) || 0;
+                                else if (m[1] === 'INHIBIT_SLEEP') config.inhibitSleep = (m[2] === 'true');
+                            }
+                        }
+                    }
+                } catch(e) {}
+            }
+            return config;
+        }
+
         _startPollingLoop() {
             if (this._timeoutId > 0) {
                 GLib.Source.remove(this._timeoutId);
@@ -395,11 +447,85 @@ const HotspotRouterToggle = GObject.registerClass(
                 if (this.menu.isOpen) {
                     this._updateDeviceLists();
                 }
+
+                // Background idle timeout & sleep inhibitor handling
+                if (this.checked) {
+                    let adv = this._readAdvancedConfig();
+                    let username = GLib.get_user_name();
+                    this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
+                        let count = 0;
+                        if (success && stdout && stdout.trim()) {
+                            count = stdout.trim().split('\n').filter(l => Boolean(l)).length;
+                        }
+                        this._clientCount = count;
+
+                        // Sleep inhibitor management
+                        if (adv.inhibitSleep && count > 0 && this._inhibitCookie === 0) {
+                            try {
+                                Gio.DBus.session.call(
+                                    'org.gnome.SessionManager',
+                                    '/org/gnome/SessionManager',
+                                    'org.gnome.SessionManager',
+                                    'Inhibit',
+                                    new GLib.Variant('(susu)', ['wifi-hotspot-router', 0, 'Hotspot is actively sharing internet', 4]),
+                                    null,
+                                    Gio.DBusCallFlags.NONE,
+                                    -1,
+                                    null,
+                                    (obj, res) => {
+                                        try {
+                                            let r = obj.call_finish(res);
+                                            this._inhibitCookie = r.deepUnpack()[0];
+                                        } catch(e) {}
+                                    }
+                                );
+                            } catch(e) {}
+                        } else if ((!adv.inhibitSleep || count === 0) && this._inhibitCookie > 0) {
+                            this._releaseInhibit();
+                        }
+
+                        // Auto-turn off when idle
+                        if (count === 0) {
+                            this._idleSeconds += 3;
+                            if (adv.idleTimeout > 0 && this._idleSeconds >= (adv.idleTimeout * 60)) {
+                                this._handleToggleEvent(false);
+                                this._idleSeconds = 0;
+                            }
+                        } else {
+                            this._idleSeconds = 0;
+                        }
+                    });
+                } else {
+                    this._idleSeconds = 0;
+                    this._releaseInhibit();
+                }
+
                 return GLib.SOURCE_CONTINUE;
             });
         }
 
+        _releaseInhibit() {
+            if (this._inhibitCookie > 0) {
+                try {
+                    Gio.DBus.session.call(
+                        'org.gnome.SessionManager',
+                        '/org/gnome/SessionManager',
+                        'org.gnome.SessionManager',
+                        'Uninhibit',
+                        new GLib.Variant('(u)', [this._inhibitCookie]),
+                        null,
+                        Gio.DBusCallFlags.NONE,
+                        -1,
+                        null,
+                        null
+                    );
+                } catch(e) {}
+                this._inhibitCookie = 0;
+            }
+        }
+
         destroy() {
+            this._releaseInhibit();
             if (this._timeoutId > 0) {
                 GLib.Source.remove(this._timeoutId);
                 this._timeoutId = 0;

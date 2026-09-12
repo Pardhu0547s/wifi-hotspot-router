@@ -18,5 +18,30 @@
       <summary>Wi-Fi Band Selection</summary>
       <description>Choose 'bg' for 2.4 GHz or 'a' for 5 GHz</description>
     </key>
+    <key name="dns-profile" type="s">
+      <default>'cloudflare'</default>
+      <summary>DNS and Ad-Blocking Profile</summary>
+      <description>Options: cloudflare, adguard, quad9, google</description>
+    </key>
+    <key name="security-mode" type="s">
+      <default>'wpa2'</default>
+      <summary>Security Encryption Mode</summary>
+      <description>Options: wpa2, wpa3-mixed</description>
+    </key>
+    <key name="isolate-clients" type="b">
+      <default>false</default>
+      <summary>Client Isolation Mode</summary>
+      <description>Prevent connected stations from communicating directly</description>
+    </key>
+    <key name="idle-timeout" type="i">
+      <default>0</default>
+      <summary>Auto-Turn Off Idle Timeout in Minutes</summary>
+      <description>0 means disabled; 10, 15, 30 minutes</description>
+    </key>
+    <key name="inhibit-sleep" type="b">
+      <default>false</default>
+      <summary>Prevent System Sleep While Hotspot Is Active</summary>
+      <description>Inhibit laptop suspend when devices are connected</description>
+    </key>
   </schema>
 </schemalist>
