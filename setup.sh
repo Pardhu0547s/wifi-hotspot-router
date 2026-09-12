@@ -179,11 +179,28 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null |
     firewall-cmd --zone=trusted --add-interface=ap0 2>/dev/null || true
 fi
 
-# 5. Kernel-level network performance and IP forwarding tuning
+# 5. Kernel-level network performance and gigabit IP forwarding tuning
 $SYSCTL_BIN -w net.ipv4.ip_forward=1 2>/dev/null || true
-$SYSCTL_BIN -w net.core.netdev_max_backlog=5000 2>/dev/null || true
+$SYSCTL_BIN -w net.core.netdev_max_backlog=10000 2>/dev/null || true
+$SYSCTL_BIN -w net.core.rmem_max=16777216 2>/dev/null || true
+$SYSCTL_BIN -w net.core.wmem_max=16777216 2>/dev/null || true
+$SYSCTL_BIN -w net.core.rmem_default=262144 2>/dev/null || true
+$SYSCTL_BIN -w net.core.wmem_default=262144 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null || true
 $SYSCTL_BIN -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
 $SYSCTL_BIN -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_sack=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.ip_no_pmtu_disc=0 2>/dev/null || true
+
+# TCP MSS Clamping to eliminate PMTU packet fragmentation and unlock maximum throughput
+$IPTABLES_BIN -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    $IPTABLES_BIN -t mangle -I FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+$IPTABLES_BIN -t mangle -C POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    $IPTABLES_BIN -t mangle -I POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
 # 6. Setup Max Clients and Deny MAC File in environment
 if [ "$MAX_CLIENTS" -ne "0" ] 2>/dev/null; then
@@ -201,7 +218,8 @@ touch "$DENY_MAC_FILE"
 # Apply iptables DROP rules for all previously blocked MACs
 while IFS= read -r blocked_mac; do
     if [ -n "$blocked_mac" ]; then
-        $IPTABLES_BIN -C FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null ||             $IPTABLES_BIN -I FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
+        $IPTABLES_BIN -C FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || \
+            $IPTABLES_BIN -I FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
     fi
 done < "$DENY_MAC_FILE"
 
@@ -219,6 +237,10 @@ fi
 
 CMD_ARGS=(--ieee80211n)
 MODE_LABEL="2.4G"
+
+# Hardware-accelerated High-Throughput capabilities
+HT_CAPAB_OPTS='[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+VHT_CAPAB_OPTS='[SHORT-GI-80][MAX-A-MPDU-LEN-EXP7][RXLDPC][RX-STBC-1][TX-STBC-2BY1]'
 
 if [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 0 ]; then
     # =========================================================================
@@ -242,10 +264,10 @@ if [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 0 ]; then
         elif $IW_BIN phy 2>/dev/null | grep "5180.0 MHz \[36\]" | grep -qv "no IR"; then
             CH_5G=36
         fi
-        CMD_ARGS+=(--ieee80211ac -c "$CH_5G" --freq-band 5 --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+        CMD_ARGS+=(--ieee80211ac -c "$CH_5G" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
         MODE_LABEL="5G"
     else
-        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
     fi
 
@@ -264,10 +286,10 @@ elif [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 1 ]; then
             fi
         done
         if [ "$BAND" = "a" ]; then
-            CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+            CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
             MODE_LABEL="5G"
         else
-            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
             MODE_LABEL="2.4G"
         fi
     else
@@ -284,10 +306,10 @@ elif [ -n "$DEFAULT_IFACE" ] && [ "$IS_DEFAULT_WIFI" -eq 1 ]; then
         
         # Match channel and band to current Wi-Fi connection
         if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
             MODE_LABEL="Repeater 5G"
         else
-            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab '')
+            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
             MODE_LABEL="Repeater 2.4G"
         fi
     fi
@@ -302,10 +324,10 @@ else
     if [ "$BAND" = "a" ]; then
         $NMCLI_BIN dev wifi rescan 2>/dev/null || true
         sleep 1.5
-        CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]')
+        CMD_ARGS+=(--ieee80211ac -c 149 --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
         MODE_LABEL="5G"
     else
-        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab '')
+        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
     fi
 fi
@@ -352,6 +374,10 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null |
     firewall-cmd --zone=trusted --remove-interface=ap0 2>/dev/null || true
 fi
 
+# TCP MSS Clamping cleanup
+iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+
 rm -f /tmp/wifi-hotspot-active-mode 2>/dev/null || true
 EOF_STOP
 sudo chmod +x /usr/local/bin/stop_hotspot
@@ -396,8 +422,10 @@ elif [ "$ACTION" = "block" ]; then
         hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
         hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
     fi
-    iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null ||         iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    iptables -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null ||         iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+    iptables -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+        iptables -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
 
     if [ -n "$IFACE" ]; then
         iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
@@ -439,7 +467,8 @@ if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
                 hostapd_cli -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
                 hostapd_cli -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
                 iw dev "$IFACE" station del "$MAC" 2>/dev/null || true
-                iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null ||                     iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+                iptables -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+                    iptables -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
             fi
         fi
     done
@@ -458,7 +487,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/start_hotspot %i
-ExecStartPost=/bin/bash -c 'sleep 3; CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
+ExecStartPost=/bin/bash -c 'sleep 2; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
 ExecStop=/usr/local/bin/stop_hotspot %i
 RemainAfterExit=yes
 
