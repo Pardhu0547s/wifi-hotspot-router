@@ -114,6 +114,18 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         _readBand() {
+            let activeModeFile = '/tmp/wifi-hotspot-active-mode';
+            if (GLib.file_test(activeModeFile, GLib.FileTest.EXISTS)) {
+                try {
+                    let [success, content] = GLib.file_get_contents(activeModeFile);
+                    if (success) {
+                        let decoder = new TextDecoder('utf-8');
+                        let mode = decoder.decode(content).trim();
+                        if (mode) return mode;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
             let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
             let band = 'bg';
             if (GLib.file_test(path, GLib.FileTest.EXISTS)) {

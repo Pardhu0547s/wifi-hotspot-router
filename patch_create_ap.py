@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Patch /usr/bin/create_ap for wifi-hotspot-router extension.
+"""Patch create_ap for wifi-hotspot-router extension across all Linux distributions.
 
 Applies two patches:
 1. Client Limits & MAC Filter: Adds MAX_NUM_STA and DENY_MAC_FILE support
    to hostapd.conf generation.
 2. 5GHz IR-CONCURRENT AP: Comments out the 'no IR' check that blocks 5GHz AP
-   on Intel WiFi cards with self-managed regulatory domains.
+   on Intel/other WiFi cards with self-managed regulatory domains.
 """
 
-filepath = '/usr/bin/create_ap'
+import sys
+import os
+import shutil
 
-with open(filepath, 'r') as f:
+filepath = sys.argv[1] if len(sys.argv) > 1 else (shutil.which('create_ap') or '/usr/bin/create_ap')
+
+if not os.path.isfile(filepath):
+    print(f"[-] Error: create_ap binary not found at {filepath}")
+    sys.exit(1)
+
+print(f"[+] Patching {filepath}...")
+
+with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
     content = f.read()
 
 # Patch 1: Add MAX_NUM_STA and DENY_MAC_FILE support after hostapd.conf EOF
@@ -26,7 +36,7 @@ if patch1_target in content:
     content = content.replace(patch1_target, patch1_replacement, 1)
     print("[+] Patch 1 applied: Client Limits & MAC Filter")
 else:
-    print("[!] Patch 1 target not found (may already be applied)")
+    print("[!] Patch 1 target not found or already applied")
 
 # Patch 2: Comment out the 'no IR' check to allow 5GHz AP
 patch2_target = '        [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1'
@@ -36,9 +46,9 @@ if patch2_target in content:
     content = content.replace(patch2_target, patch2_replacement, 1)
     print("[+] Patch 2 applied: 5GHz IR-CONCURRENT AP support")
 else:
-    print("[!] Patch 2 target not found (may already be applied)")
+    print("[!] Patch 2 target not found or already applied")
 
-with open(filepath, 'w') as f:
+with open(filepath, 'w', encoding='utf-8') as f:
     f.write(content)
 
-print("[+] All patches written to", filepath)
+print("[+] All patches successfully applied to", filepath)

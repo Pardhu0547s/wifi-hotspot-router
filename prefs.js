@@ -85,7 +85,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         bandModel.append('5 GHz — Faster speeds, less interference');
         const bandRow = new Adw.ComboRow({
             title: 'Wi-Fi Band',
-            subtitle: 'Select the frequency band for the hotspot',
+            subtitle: 'Frequency band for Ethernet or offline sharing. (When repeating active Wi-Fi, the band matches your Wi-Fi network)',
             model: bandModel,
             selected: config.band === 'a' ? 1 : 0
         });
