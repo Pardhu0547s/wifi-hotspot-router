@@ -557,13 +557,64 @@ const HotspotRouterIndicator = GObject.registerClass(
 export default class HotspotRouterExtension extends Extension {
     enable() {
         this._indicator = new HotspotRouterIndicator(this);
-        Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
+        const quickSettings = Main.panel.statusArea.quickSettings;
+        quickSettings.addExternalIndicator(this._indicator);
+
+        this._repositionToggle(quickSettings);
+
+        this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._idleId = 0;
+            this._repositionToggle(quickSettings);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _repositionToggle(quickSettings) {
+        try {
+            const toggle = this._indicator?._toggle;
+            if (!toggle) return;
+
+            const grid = quickSettings?.menu?._grid;
+            if (!grid) return;
+
+            const children = grid.get_children();
+            if (!children || children.length === 0) return;
+
+            // Find last network item in Quick Settings grid
+            const networkItems = quickSettings._network?.quickSettingsItems;
+            let sibling = null;
+
+            if (networkItems && networkItems.length > 0) {
+                const lastNetItem = networkItems[networkItems.length - 1];
+                const netIdx = children.indexOf(lastNetItem);
+                if (netIdx !== -1 && netIdx + 1 < children.length) {
+                    sibling = children[netIdx + 1];
+                }
+            }
+
+            // Fallback to Bluetooth toggle if network items not found
+            if (!sibling && quickSettings._bluetooth?.quickSettingsItems?.length > 0) {
+                sibling = quickSettings._bluetooth.quickSettingsItems[0];
+            }
+
+            if (sibling && sibling !== toggle) {
+                grid.set_child_below_sibling(toggle, sibling);
+            }
+        } catch (e) {
+            console.error(`[HotspotRouter] Failed to reposition toggle beside Wi-Fi: ${e.message}`);
+        }
     }
 
     disable() {
+        if (this._idleId) {
+            GLib.Source.remove(this._idleId);
+            this._idleId = 0;
+        }
+
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;
         }
     }
 }
+
