@@ -16,13 +16,17 @@ const HotspotRouterToggle = GObject.registerClass(
             this._clientCount = 0;
             this._idleSeconds = 0;
             this._inhibitCookie = 0;
-            this._bandLabel = this._readBand();
+            this._inhibitPending = false;
 
             super._init({
-                title: `Hotspot (${this._bandLabel})`,
+                title: 'Hotspot',
                 iconName: 'network-wireless-hotspot-symbolic',
                 toggleMode: true,
             });
+
+            // Read band AFTER super._init() so this.checked is available
+            this._bandLabel = this._readBand();
+            this.title = `Hotspot (${this._bandLabel})`;
 
 
             this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
@@ -46,12 +50,9 @@ const HotspotRouterToggle = GObject.registerClass(
                 y_expand: true
             });
 
-            // Dynamically adjust wrapper height based on content to prevent 0-height collapse
-            this._scrollContent.connect('notify::height', () => {
-                let h = this._scrollContent.get_height();
-                let constrainedHeight = Math.min(Math.max(h, 250), 450);
-                this._scrollViewItem.set_style(`min-height: ${constrainedHeight}px; max-height: ${constrainedHeight}px; padding: 0; margin: 0;`);
-            });
+            // Set a fixed max-height on the scroll view to prevent menu overflow
+            // Do NOT use notify::height — it causes relayout loops and jitter
+            this._scrollView.set_style('max-height: 400px;');
 
             // QR Code display container (inside the scroll view)
             this._qrCodeContainer = new St.Bin({
@@ -72,8 +73,9 @@ const HotspotRouterToggle = GObject.registerClass(
             let qrSeparator = new PopupMenu.PopupSeparatorMenuItem();
             this._scrollContent.add_child(qrSeparator);
             
-            // Store reference to hide/show separator with QR code
+            // Store reference to hide/show separator with QR code — hide initially
             this._qrSeparator = qrSeparator;
+            this._qrSeparator.hide();
 
             // Connected clients section
             this._connectedSection = new PopupMenu.PopupMenuSection();
@@ -90,6 +92,7 @@ const HotspotRouterToggle = GObject.registerClass(
             // Extension Settings (inside scroll so it's always reachable)
             let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
             settingsItem.connect('activate', () => {
+                this.menu.close();
                 this._openExtensionPreferences();
             });
             this._scrollContent.add_child(settingsItem);
@@ -110,7 +113,12 @@ const HotspotRouterToggle = GObject.registerClass(
             this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
                     this._refreshBandLabel();
-                    this._updateQRCode();
+                    if (this.checked) {
+                        this._updateQRCode();
+                    } else {
+                        this._qrCodeContainer.hide();
+                        if (this._qrSeparator) this._qrSeparator.hide();
+                    }
                     this._updateDeviceLists();
                 }
             });
@@ -208,6 +216,8 @@ const HotspotRouterToggle = GObject.registerClass(
                     this._qrCodeContainer.show();
                     if (this._qrSeparator) this._qrSeparator.show();
                 } else {
+                    // Reset so it retries next time (e.g. after user installs qrencode)
+                    this._lastQrString = null;
                     this._qrCodeContainer.hide();
                     if (this._qrSeparator) this._qrSeparator.hide();
                 }
@@ -220,25 +230,6 @@ const HotspotRouterToggle = GObject.registerClass(
             } catch (err) {
                 let msg = err ? (err.message || String(err)) : '';
                 console.warn(`[HotspotRouter] Note on opening preferences: ${msg}`);
-                if (msg.includes('Already showing a prefs dialog')) {
-                    try {
-                        let proc = new Gio.Subprocess({
-                            argv: ['pkill', '-f', 'org.gnome.Shell.Extensions'],
-                            flags: Gio.SubprocessFlags.NONE
-                        });
-                        proc.init(null);
-                        proc.wait_check_async(null, () => {
-                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-                                try {
-                                    this._extension.openPreferences().catch(() => {});
-                                } catch (e) {}
-                                return GLib.SOURCE_REMOVE;
-                            });
-                        });
-                    } catch (killErr) {
-                        console.error(`[HotspotRouter] Prefs recovery failed: ${killErr.message}`);
-                    }
-                }
             }
         }
 
@@ -452,50 +443,47 @@ const HotspotRouterToggle = GObject.registerClass(
                 // Background idle timeout & sleep inhibitor handling
                 if (this.checked) {
                     let adv = this._readAdvancedConfig();
-                    let username = GLib.get_user_name();
-                    this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
-                        let count = 0;
-                        if (success && stdout && stdout.trim()) {
-                            count = stdout.trim().split('\n').filter(l => Boolean(l)).length;
-                        }
-                        this._clientCount = count;
+                    // Use the cached client count from _updateDeviceLists instead of
+                    // spawning a duplicate sudo subprocess every 3 seconds
+                    let count = this._clientCount;
 
-                        // Sleep inhibitor management
-                        if (adv.inhibitSleep && count > 0 && this._inhibitCookie === 0) {
-                            try {
-                                Gio.DBus.session.call(
-                                    'org.gnome.SessionManager',
-                                    '/org/gnome/SessionManager',
-                                    'org.gnome.SessionManager',
-                                    'Inhibit',
-                                    new GLib.Variant('(susu)', ['wifi-hotspot-router', 0, 'Hotspot is actively sharing internet', 4]),
-                                    null,
-                                    Gio.DBusCallFlags.NONE,
-                                    -1,
-                                    null,
-                                    (obj, res) => {
-                                        try {
-                                            let r = obj.call_finish(res);
-                                            this._inhibitCookie = r.deepUnpack()[0];
-                                        } catch(e) {}
-                                    }
-                                );
-                            } catch(e) {}
-                        } else if ((!adv.inhibitSleep || count === 0) && this._inhibitCookie > 0) {
-                            this._releaseInhibit();
+                    // Sleep inhibitor management
+                    if (adv.inhibitSleep && count > 0 && this._inhibitCookie === 0 && !this._inhibitPending) {
+                        this._inhibitPending = true;
+                        try {
+                            Gio.DBus.session.call(
+                                'org.gnome.SessionManager',
+                                '/org/gnome/SessionManager',
+                                'org.gnome.SessionManager',
+                                'Inhibit',
+                                new GLib.Variant('(susu)', ['wifi-hotspot-router', 0, 'Hotspot is actively sharing internet', 4]),
+                                null,
+                                Gio.DBusCallFlags.NONE,
+                                -1,
+                                null,
+                                (obj, res) => {
+                                    this._inhibitPending = false;
+                                    try {
+                                        let r = obj.call_finish(res);
+                                        this._inhibitCookie = r.deepUnpack()[0];
+                                    } catch(e) {}
+                                }
+                            );
+                        } catch(e) { this._inhibitPending = false; }
+                    } else if ((!adv.inhibitSleep || count === 0) && this._inhibitCookie > 0) {
+                        this._releaseInhibit();
                         }
 
-                        // Auto-turn off when idle
-                        if (count === 0) {
-                            this._idleSeconds += 3;
-                            if (adv.idleTimeout > 0 && this._idleSeconds >= (adv.idleTimeout * 60)) {
-                                this._handleToggleEvent(false);
-                                this._idleSeconds = 0;
-                            }
-                        } else {
+                    // Auto-turn off when idle
+                    if (count === 0) {
+                        this._idleSeconds += 3;
+                        if (adv.idleTimeout > 0 && this._idleSeconds >= (adv.idleTimeout * 60)) {
+                            this._handleToggleEvent(false);
                             this._idleSeconds = 0;
                         }
-                    });
+                    } else {
+                        this._idleSeconds = 0;
+                    }
                 } else {
                     this._idleSeconds = 0;
                     this._releaseInhibit();
@@ -534,6 +522,11 @@ const HotspotRouterToggle = GObject.registerClass(
             if (this._openStateId > 0) {
                 this.menu.disconnect(this._openStateId);
                 this._openStateId = 0;
+            }
+            // Clean up temporary QR code file
+            if (this._lastQrFile) {
+                try { Gio.File.new_for_path(this._lastQrFile).delete(null); } catch(e) {}
+                this._lastQrFile = null;
             }
             super.destroy();
         }
