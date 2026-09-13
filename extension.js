@@ -26,8 +26,8 @@ const HotspotRouterToggle = GObject.registerClass(
 
             // Read band AFTER super._init() so this.checked is available
             this._bandLabel = this._readBand();
-            this.title = `Hotspot (${this._bandLabel})`;
-
+            this.title = 'Hotspot';
+            this.subtitle = this.checked ? this._bandLabel : 'Off';
 
             this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
 
@@ -125,45 +125,48 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         _readBand() {
+            let rawMode = '';
             let activeModeFile = '/tmp/wifi-hotspot-active-mode';
             if (this.checked && GLib.file_test(activeModeFile, GLib.FileTest.EXISTS)) {
                 try {
                     let [success, content] = GLib.file_get_contents(activeModeFile);
                     if (success) {
                         let decoder = new TextDecoder('utf-8');
-                        let mode = decoder.decode(content).trim();
-                        if (mode) return mode;
+                        rawMode = decoder.decode(content).trim();
                     }
                 } catch (e) { /* ignore */ }
             }
 
-            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
-            let band = 'bg';
-            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
-                try {
-                    let [success, content] = GLib.file_get_contents(path);
-                    if (success) {
-                        let decoder = new TextDecoder('utf-8');
-                        let lines = decoder.decode(content).split('\n');
-                        for (let line of lines) {
-                            let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
-                            if (match && match[1] === 'BAND') {
-                                band = match[2];
+            if (!rawMode) {
+                let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+                if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+                    try {
+                        let [success, content] = GLib.file_get_contents(path);
+                        if (success) {
+                            let decoder = new TextDecoder('utf-8');
+                            let lines = decoder.decode(content).split('\n');
+                            for (let line of lines) {
+                                let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
+                                if (match && match[1] === 'BAND') {
+                                    rawMode = match[2];
+                                }
                             }
                         }
-                    }
-                } catch (e) { /* ignore */ }
+                    } catch (e) { /* ignore */ }
+                }
             }
-            return band === 'a' ? '5G' : '2.4G';
+
+            if (rawMode.startsWith('5G') || rawMode === 'a') return '5GHz';
+            if (rawMode.startsWith('6G')) return '6GHz';
+            return '2.4GHz';
         }
 
         _refreshBandLabel() {
-            let newLabel = this._readBand();
-            if (this._bandLabel !== newLabel) {
-                this._bandLabel = newLabel;
-                this.title = `Hotspot (${this._bandLabel})`;
-                this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
-            }
+            let band = this._readBand();
+            this._bandLabel = band;
+            this.title = 'Hotspot';
+            this.subtitle = this.checked ? band : 'Off';
+            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${band})`, 'Manage connected clients');
         }
 
         _updateQRCode() {
@@ -348,8 +351,12 @@ const HotspotRouterToggle = GObject.registerClass(
 
                         let blockBtn = new St.Button({
                             style_class: 'button',
-                            child: new St.Label({ text: 'Block' }),
-                            style: 'min-width: 60px;',
+                            child: new St.Label({
+                                text: 'Block',
+                                style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
+                            }),
+                            style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 55px; height: 24px;',
+                            x_align: Clutter.ActorAlign.CENTER,
                             y_align: Clutter.ActorAlign.CENTER,
                         });
 
@@ -388,8 +395,13 @@ const HotspotRouterToggle = GObject.registerClass(
 
                         let unblockBtn = new St.Button({
                             style_class: 'button',
-                            child: new St.Label({ text: 'Unblock' }),
-                            style: 'min-width: 75px;',
+                            child: new St.Label({
+                                text: 'Unblock',
+                                style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
+                            }),
+                            style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 65px; height: 24px;',
+                            x_align: Clutter.ActorAlign.CENTER,
+                            y_align: Clutter.ActorAlign.CENTER,
                         });
 
                         unblockBtn.connect('clicked', () => {
