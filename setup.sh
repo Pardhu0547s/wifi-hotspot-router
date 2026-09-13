@@ -281,7 +281,8 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         # Check if 5GHz transmission is permitted (free of "no IR")
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
@@ -328,7 +329,8 @@ elif [ -n "$DEFAULT_IFACE" ]; then
         # Check if 5GHz transmission is permitted (free of "no IR")
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
@@ -355,7 +357,8 @@ else
     if [ "$BAND" = "a" ]; then
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "no IR" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
