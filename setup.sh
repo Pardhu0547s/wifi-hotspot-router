@@ -285,7 +285,7 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
             [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="5G"
         else
@@ -305,7 +305,7 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         
         # Match channel and band to current Wi-Fi connection
         if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="Repeater 5G"
         else
@@ -333,7 +333,7 @@ elif [ -n "$DEFAULT_IFACE" ]; then
             [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="5G"
         else
@@ -361,7 +361,7 @@ else
             [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS" --vht-chwidth 80)
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="5G"
         else
