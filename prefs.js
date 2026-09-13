@@ -369,17 +369,24 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             warningIcon.visible = !passValid;
             if (!passValid) return;
 
-            settings.set_string('hotspot-ssid', ssid);
-            settings.set_boolean('use-password', usePass);
-            settings.set_int('max-clients', maxCl);
-            settings.set_string('hotspot-band', band);
-            settings.set_string('dns-profile', dnsProfile);
-            settings.set_string('security-mode', securityMode);
-            settings.set_boolean('isolate-clients', isolateClients);
-            settings.set_int('idle-timeout', idleTimeout);
-            settings.set_boolean('inhibit-sleep', inhibitSleep);
-
+            // Save the config file FIRST — this is the primary source of truth
             this._saveConfig(ssid, usePass, pass, maxCl, band, dnsProfile, securityMode, isolateClients, idleTimeout, inhibitSleep);
+
+            // GSettings is secondary — wrap in try-catch so a stale compiled schema
+            // doesn't prevent saving the config or restarting the hotspot
+            try {
+                settings.set_string('hotspot-ssid', ssid);
+                settings.set_boolean('use-password', usePass);
+                settings.set_int('max-clients', maxCl);
+                settings.set_string('hotspot-band', band);
+                settings.set_string('dns-profile', dnsProfile);
+                settings.set_string('security-mode', securityMode);
+                settings.set_boolean('isolate-clients', isolateClients);
+                settings.set_int('idle-timeout', idleTimeout);
+                settings.set_boolean('inhibit-sleep', inhibitSleep);
+            } catch (e) {
+                console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
+            }
 
             hasUnsavedChanges = false;
             saveRow.visible = false;
