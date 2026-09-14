@@ -107,270 +107,20 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         group.add(bandRow);
 
-        const clientsGroup = new Adw.PreferencesGroup({
-            title: 'Connected Devices & Bandwidth Limits',
-            description: 'Monitor active stations and assign individual download speed limits per device'
-        });
-        page.add(clientsGroup);
-
-        const clientHeaderRow = new Adw.ActionRow({
-            title: 'Active Connected Devices',
-            subtitle: 'Real-time station monitoring and bandwidth throttling'
-        });
-        const refreshBtn = new Gtk.Button({
-            icon_name: 'view-refresh-symbolic',
-            tooltip_text: 'Refresh Device List',
-            valign: Gtk.Align.CENTER
-        });
-        clientHeaderRow.add_suffix(refreshBtn);
-        clientsGroup.add(clientHeaderRow);
-
-        let dynamicClientRows = [];
-
-        const formatBytes = (b) => {
-            if (!b || b <= 0) return '0 B';
-            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(b) / Math.log(1024));
-            return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
-        };
-
-        const speedLimitOptions = [
-            { label: 'Unlimited (Full Speed)', rate: 0 },
-            { label: '1 Mbps (Basic Browsing)', rate: 1 },
-            { label: '2 Mbps (Light Streaming)', rate: 2 },
-            { label: '5 Mbps (Standard SD)', rate: 5 },
-            { label: '10 Mbps (HD Video)', rate: 10 },
-            { label: '25 Mbps (Fast)', rate: 25 },
-            { label: '50 Mbps (High Speed)', rate: 50 }
-        ];
-
-        const loadClients = () => {
-            for (let r of dynamicClientRows) {
-                clientsGroup.remove(r);
-            }
-            dynamicClientRows = [];
-
-            let username = GLib.get_user_name();
-            let configuredLimits = {};
-
-            try {
-                let [success, stdout] = GLib.spawn_command_line_sync(
-                    `/usr/local/bin/manage_hotspot_clients get_limits "" ${username}`
-                );
-                if (success && stdout) {
-                    let lines = new TextDecoder('utf-8').decode(stdout).trim().split('\n');
-                    for (let line of lines) {
-                        let [m, r] = line.split('|');
-                        if (m && r) {
-                            configuredLimits[m.trim().toLowerCase()] = parseInt(r.trim(), 10) || 0;
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error(e);
-            }
-
-            try {
-                let [success, stdout] = GLib.spawn_command_line_sync(
-                    `/usr/local/bin/manage_hotspot_clients list "" ${username}`
-                );
-                let lines = (success && stdout) ? new TextDecoder('utf-8').decode(stdout).trim().split('\n').filter(Boolean) : [];
-
-                if (lines.length === 0) {
-                    const emptyRow = new Adw.ActionRow({
-                        title: 'No Devices Connected',
-                        subtitle: 'Connected phones, laptops, and IoT stations will appear here with speed limit options.'
-                    });
-                    clientsGroup.add(emptyRow);
-                    dynamicClientRows.push(emptyRow);
-                    return;
-                }
-
-                for (let line of lines) {
-                    let parts = line.split('|');
-                    let mac = parts[0];
-                    let hostname = parts.length > 1 ? parts[1] : mac;
-                    let rxBytes = parts.length > 2 ? parseInt(parts[2], 10) || 0 : 0;
-                    let txBytes = parts.length > 3 ? parseInt(parts[3], 10) || 0 : 0;
-                    let bitrate = parts.length > 4 ? parts[4] : '';
-                    let ip = parts.length > 5 ? parts[5] : 'Dynamic IP';
-
-                    let totalBytes = rxBytes + txBytes;
-                    let macKey = mac.toLowerCase();
-                    let currentRate = configuredLimits[macKey] || 0;
-
-                    let rateLabel = currentRate > 0 ? `⚡ Limited: ${currentRate} Mbps` : '⚡ Unlimited';
-                    let subtitleText = `${ip} • ${mac} • ${formatBytes(totalBytes)} transferred${bitrate ? ' • ' + bitrate : ''} • [${rateLabel}]`;
-
-                    const expanderRow = new Adw.ExpanderRow({
-                        title: hostname,
-                        subtitle: subtitleText
-                    });
-
-                    const speedModel = new Gtk.StringList();
-                    let selectedIdx = 0;
-                    for (let i = 0; i < speedLimitOptions.length; i++) {
-                        speedModel.append(speedLimitOptions[i].label);
-                        if (speedLimitOptions[i].rate === currentRate) {
-                            selectedIdx = i;
-                        }
-                    }
-
-                    const speedRow = new Adw.ComboRow({
-                        title: 'Bandwidth Speed Limit',
-                        subtitle: 'Set maximum download rate allocated to this hardware station',
-                        model: speedModel,
-                        selected: selectedIdx
-                    });
-
-                    speedRow.connect('notify::selected', () => {
-                        let chosenOption = speedLimitOptions[speedRow.selected] || speedLimitOptions[0];
-                        try {
-                            let proc = new Gio.Subprocess({
-                                argv: ['sudo', '/usr/local/bin/manage_hotspot_clients', 'set_limit', mac, username, String(chosenOption.rate)],
-                                flags: Gio.SubprocessFlags.NONE
-                            });
-                            proc.init(null);
-                            proc.wait_async(null, (obj, res) => {
-                                try {
-                                    obj.wait_finish(res);
-                                    let newRateLabel = chosenOption.rate > 0 ? `⚡ Limited: ${chosenOption.rate} Mbps` : '⚡ Unlimited';
-                                    expanderRow.subtitle = `${ip} • ${mac} • ${formatBytes(totalBytes)} transferred${bitrate ? ' • ' + bitrate : ''} • [${newRateLabel}]`;
-                                } catch (err) {
-                                    console.error(err);
-                                }
-                            });
-                        } catch (e) {
-                            console.error(e);
-                        }
-                    });
-
-                    expanderRow.add_row(speedRow);
-
-                    const blockRow = new Adw.ActionRow({
-                        title: 'Block Device Access',
-                        subtitle: 'Kick and ban this client from connecting to the hotspot'
-                    });
-                    const blockButton = new Gtk.Button({
-                        label: 'Block',
-                        css_classes: ['destructive-action'],
-                        valign: Gtk.Align.CENTER
-                    });
-                    blockButton.connect('clicked', () => {
-                        try {
-                            let proc = new Gio.Subprocess({
-                                argv: ['sudo', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname],
-                                flags: Gio.SubprocessFlags.NONE
-                            });
-                            proc.init(null);
-                            proc.wait_async(null, (obj, res) => {
-                                try {
-                                    obj.wait_finish(res);
-                                    loadClients();
-                                } catch (err) {
-                                    console.error(err);
-                                }
-                            });
-                        } catch (e) {
-                            console.error(e);
-                        }
-                    });
-                    blockRow.add_suffix(blockButton);
-                    expanderRow.add_row(blockRow);
-
-                    clientsGroup.add(expanderRow);
-                    dynamicClientRows.push(expanderRow);
-                }
-            } catch (err) {
-                console.error(err);
-            }
-        };
-
-        refreshBtn.connect('clicked', loadClients);
-        loadClients();
-
-        const advGroup = new Adw.PreferencesGroup({
-            title: 'Advanced Router and Power Settings',
-            description: 'Optional performance, privacy, and power management options'
-        });
-        page.add(advGroup);
-
-        const dnsModel = new Gtk.StringList();
-        dnsModel.append('System / ISP Default (No Custom DNS / Adblock Disabled)');
-        dnsModel.append('Cloudflare 1.1.1.1 (Fastest Default)');
-        dnsModel.append('AdGuard DNS (Block Ads and Trackers)');
-        dnsModel.append('Quad9 9.9.9.9 (Malware and Phishing Filter)');
-        dnsModel.append('Google DNS 8.8.8.8');
-        const dnsProfiles = ['system', 'cloudflare', 'adguard', 'quad9', 'google'];
-        let initialDnsIdx = dnsProfiles.indexOf(config.dnsProfile);
-        if (initialDnsIdx < 0) initialDnsIdx = 0;
-        const dnsRow = new Adw.ComboRow({
-            title: 'DNS and Ad-Blocking',
-            subtitle: 'Select upstream DNS provider or disable custom filtering',
-            model: dnsModel,
-            selected: initialDnsIdx
-        });
-        advGroup.add(dnsRow);
-
-        const isolateRow = new Adw.SwitchRow({
-            title: 'Client Isolation (Guest Mode)',
-            subtitle: 'Prevent connected devices from communicating directly with each other or host services',
-            active: config.isolateClients
-        });
-        advGroup.add(isolateRow);
-
-        const idleModel = new Gtk.StringList();
-        idleModel.append('Disabled (Always On)');
-        idleModel.append('10 Minutes');
-        idleModel.append('15 Minutes');
-        idleModel.append('30 Minutes');
-        let initialIdleIdx = config.idleTimeout === 10 ? 1 : (config.idleTimeout === 15 ? 2 : (config.idleTimeout === 30 ? 3 : 0));
-        const idleRow = new Adw.ComboRow({
-            title: 'Auto-Turn Off When Idle',
-            subtitle: 'Automatically disable hotspot when no devices are connected to save battery',
-            model: idleModel,
-            selected: initialIdleIdx
-        });
-        advGroup.add(idleRow);
-
-        const sleepRow = new Adw.SwitchRow({
-            title: 'Prevent Laptop Sleep While Active',
-            subtitle: 'Keep system awake while clients are actively connected to prevent disconnections',
-            active: config.inhibitSleep
-        });
-        advGroup.add(sleepRow);
-
-        const donationsRow = new Adw.ActionRow({
-            title: 'Support This Project',
-            subtitle: 'Donate or star the repository to support development'
-        });
-        const linkButton = new Gtk.LinkButton({
-            label: 'Donate / Github',
-            uri: 'https://github.com/Pardhu0547s/wifi-hotspot-router',
-            valign: Gtk.Align.CENTER
-        });
-        donationsRow.add_suffix(linkButton);
-        advGroup.add(donationsRow);
-
         const triggerSave = () => {
             let ssid = ssidRow.get_text() || 'hotspot';
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
             let band = bandRow.selected === 1 ? 'a' : 'bg';
-            let dnsProfile = dnsProfiles[dnsRow.selected] || 'system';
             let securityMode = secProfiles[secRow.selected] || 'wpa2';
-            let isolateClients = isolateRow.active;
-            const idleValues = [0, 10, 15, 30];
-            let idleTimeout = idleValues[idleRow.selected] || 0;
-            let inhibitSleep = sleepRow.active;
 
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
             if (!passValid) return;
 
             // Save the config file FIRST — this is the primary source of truth
-            this._saveConfig(ssid, usePass, pass, maxCl, band, dnsProfile, securityMode, isolateClients, idleTimeout, inhibitSleep);
+            this._saveConfig(ssid, usePass, pass, maxCl, band, config.dnsProfile, securityMode, config.isolateClients, config.idleTimeout, config.inhibitSleep);
 
             // GSettings is secondary — wrap in try-catch so a stale compiled schema
             // doesn't prevent saving the config or restarting the hotspot
@@ -379,11 +129,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                 settings.set_boolean('use-password', usePass);
                 settings.set_int('max-clients', maxCl);
                 settings.set_string('hotspot-band', band);
-                settings.set_string('dns-profile', dnsProfile);
                 settings.set_string('security-mode', securityMode);
-                settings.set_boolean('isolate-clients', isolateClients);
-                settings.set_int('idle-timeout', idleTimeout);
-                settings.set_boolean('inhibit-sleep', inhibitSleep);
             } catch (e) {
                 console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
             }
@@ -423,11 +169,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         passwordRow.connect('changed', markChanged);
         maxClientsAdjustment.connect('value-changed', markChanged);
         bandRow.connect('notify::selected', markChanged);
-        dnsRow.connect('notify::selected', markChanged);
         secRow.connect('notify::selected', markChanged);
-        isolateRow.connect('notify::active', markChanged);
-        idleRow.connect('notify::selected', markChanged);
-        sleepRow.connect('notify::active', markChanged);
 
         window.connect('close-request', () => {
             if (hasUnsavedChanges) {
