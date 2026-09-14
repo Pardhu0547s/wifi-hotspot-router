@@ -199,7 +199,10 @@ const HotspotRouterToggle = GObject.registerClass(
             let qrString = `WIFI:S:${ssid};T:${usePassword ? 'WPA' : 'nopass'};P:${usePassword ? password : ''};;`;
             
             if (this._lastQrString === qrString) {
-                return; // Already generated and displayed
+                // Already generated — just ensure it's visible
+                this._qrCodeContainer.show();
+                if (this._qrSeparator) this._qrSeparator.show();
+                return;
             }
             this._lastQrString = qrString;
             
