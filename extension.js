@@ -575,31 +575,38 @@ export default class HotspotRouterExtension extends Extension {
         const quickSettings = Main.panel.statusArea.quickSettings;
         quickSettings.addExternalIndicator(this._indicator);
 
-        this._repositionToggle(quickSettings);
-
-        this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            this._idleId = 0;
-            this._repositionToggle(quickSettings);
-            return GLib.SOURCE_REMOVE;
+        // Attempt repositioning immediately, then retry periodically
+        // because _setupIndicators() is async in GNOME Shell and
+        // Wi-Fi/Bluetooth toggles may not exist yet on some distros (Ubuntu)
+        this._repositionAttempts = 0;
+        this._repositionTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._repositionAttempts++;
+            const success = this._repositionToggle(quickSettings);
+            if (success || this._repositionAttempts >= 10) {
+                this._repositionTimerId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
         });
     }
 
     _repositionToggle(quickSettings) {
         try {
             const toggle = this._indicator?._toggle;
-            if (!toggle) return;
+            if (!toggle) return false;
 
             const grid = quickSettings?.menu?._grid;
-            if (!grid) return;
+            if (!grid) return false;
 
             const children = grid.get_children();
-            if (!children || children.length === 0) return;
+            if (!children || children.length === 0) return false;
 
-            // Find last network item in Quick Settings grid
+            // Find the Wi-Fi / Network toggle in the grid
             const networkItems = quickSettings._network?.quickSettingsItems;
             let sibling = null;
 
             if (networkItems && networkItems.length > 0) {
+                // Place hotspot right after the last network quick settings item
                 const lastNetItem = networkItems[networkItems.length - 1];
                 const netIdx = children.indexOf(lastNetItem);
                 if (netIdx !== -1 && netIdx + 1 < children.length) {
@@ -607,23 +614,42 @@ export default class HotspotRouterExtension extends Extension {
                 }
             }
 
-            // Fallback to Bluetooth toggle if network items not found
+            // Fallback: place before Bluetooth toggle
             if (!sibling && quickSettings._bluetooth?.quickSettingsItems?.length > 0) {
                 sibling = quickSettings._bluetooth.quickSettingsItems[0];
             }
 
+            // Fallback: search grid children for any network-wireless icon toggle
+            if (!sibling) {
+                for (let child of children) {
+                    if (child !== toggle && child.iconName &&
+                        child.iconName.includes('network-wireless') &&
+                        !child.iconName.includes('hotspot')) {
+                        const idx = children.indexOf(child);
+                        if (idx !== -1 && idx + 1 < children.length) {
+                            sibling = children[idx + 1];
+                        }
+                        break;
+                    }
+                }
+            }
+
             if (sibling && sibling !== toggle) {
                 grid.set_child_below_sibling(toggle, sibling);
+                return true;
             }
+
+            return false;
         } catch (e) {
             console.error(`[HotspotRouter] Failed to reposition toggle beside Wi-Fi: ${e.message}`);
+            return false;
         }
     }
 
     disable() {
-        if (this._idleId) {
-            GLib.Source.remove(this._idleId);
-            this._idleId = 0;
+        if (this._repositionTimerId) {
+            GLib.Source.remove(this._repositionTimerId);
+            this._repositionTimerId = 0;
         }
 
         if (this._indicator) {
