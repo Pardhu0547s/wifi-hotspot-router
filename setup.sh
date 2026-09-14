@@ -516,12 +516,14 @@ HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
 
 DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
 CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | grep -i "UP" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+[ -z "$IFACE" ] && IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
 
 apply_traffic_limits() {
     local USER="$1"
     local LIMITS_FILE="/home/$USER/.config/wifi-hotspot-limits.conf"
-    local AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+    local AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | grep -i "UP" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+    [ -z "$AP_IFACE" ] && AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
     [ -z "$AP_IFACE" ] && return 0
 
     if [ ! -f "$LIMITS_FILE" ] || [ ! -s "$LIMITS_FILE" ]; then
