@@ -43,16 +43,16 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
     case "$PKG_MGR" in
         apt)
             sudo apt-get update -y || true
-            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode wireless-tools python3 libglib2.0-bin procps
+            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 libglib2.0-bin procps
             ;;
         dnf)
-            sudo dnf install -y hostapd dnsmasq iw iptables iproute qrencode wireless-tools python3 glib2-devel procps-ng
+            sudo dnf install -y hostapd dnsmasq iw iptables iproute qrencode python3 glib2-devel procps-ng
             ;;
         pacman)
-            sudo pacman -Sy --noconfirm hostapd dnsmasq iw iptables iproute2 qrencode wireless_tools python glib2 procps-ng
+            sudo pacman -Sy --noconfirm hostapd dnsmasq iw iptables iproute2 qrencode python glib2 procps-ng
             ;;
         zypper)
-            sudo zypper install -y hostapd dnsmasq iw iptables iproute2 qrencode wireless-tools python3 glib2-devel procps
+            sudo zypper install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 glib2-devel procps
             ;;
         *)
             echo "[-] Warning: Unknown package manager. Please ensure the following packages are installed manually: ${MISSING_TOOLS[*]}"
