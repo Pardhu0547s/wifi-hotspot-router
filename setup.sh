@@ -164,13 +164,13 @@ done
 DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
 DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
 
-# If NOT repeating an active Wi-Fi connection, clean up previous create_ap instances
-if [ "$IS_WIFI_CONNECTED" -eq 0 ]; then
-    for w in "${WIFI_INTERFACES[@]}"; do
+# Clean up previous virtual interfaces unconditionally to avoid AP interface limit errors (e.g., #{ AP } <= 1)
+for w in "${WIFI_INTERFACES[@]}"; do
+    if [ "$IS_WIFI_CONNECTED" -eq 0 ]; then
         $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
-        $IW_BIN dev "${w}_ap" del 2>/dev/null || true
-    done
-fi
+    fi
+    $IW_BIN dev "${w}_ap" del 2>/dev/null || true
+done
 $IW_BIN dev ap0 del 2>/dev/null || true
 $IW_BIN dev ap1 del 2>/dev/null || true
 
@@ -316,6 +316,7 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         # because it tries to change MAC address after creation.
         # Workaround: Manually create a virtual interface (ap0), generate a guaranteed valid 
         # locally administered MAC, bring it up, and pass it to create_ap using --no-virt.
+        $IW_BIN dev "${WIFI_IFACE}_ap" del 2>/dev/null || true
         $IW_BIN dev ap0 del 2>/dev/null || true
         $IW_BIN dev "$WIFI_IFACE" interface add ap0 type __ap 2>/dev/null || true
         
@@ -469,8 +470,10 @@ if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none"
     CMD_ARGS+=("$PASSWORD")
 fi
 
-# Clean up any leftover virtual interface before launch
-$IW_BIN dev ap0 del 2>/dev/null || true
+# Clean up any leftover virtual interface before launch (only if not pre-created)
+if [ "$WIFI_IFACE" != "ap0" ]; then
+    $IW_BIN dev ap0 del 2>/dev/null || true
+fi
 
 # Store active username for hostapd_action.sh
 echo "$USER_NAME" > /tmp/wifi-hotspot-active-user 2>/dev/null || true
