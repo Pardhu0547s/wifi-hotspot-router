@@ -17,6 +17,8 @@ const HotspotRouterToggle = GObject.registerClass(
             this._idleSeconds = 0;
             this._inhibitCookie = 0;
             this._inhibitPending = false;
+            this._destroyed = false;
+            this._activeSubprocesses = [];
 
             super._init({
                 title: 'Hotspot',
@@ -138,7 +140,7 @@ const HotspotRouterToggle = GObject.registerClass(
             }
 
             if (!rawMode) {
-                let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+                let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
                 if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
                     try {
                         let [success, content] = GLib.file_get_contents(path);
@@ -170,7 +172,7 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         _updateQRCode() {
-            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+            let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
             let ssid = 'hotspot';
             let usePassword = true;
             let password = '';
@@ -261,8 +263,11 @@ const HotspotRouterToggle = GObject.registerClass(
                     flags: callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE
                 });
                 proc.init(null);
+                this._activeSubprocesses.push(proc);
                 if (callback) {
                     proc.communicate_utf8_async(null, null, (obj, res) => {
+                        this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
+                        if (this._destroyed) return;
                         try {
                             let [success, stdout] = obj.communicate_utf8_finish(res);
                             callback(success, stdout);
@@ -271,7 +276,10 @@ const HotspotRouterToggle = GObject.registerClass(
                         }
                     });
                 } else {
-                    proc.wait_async(null, null);
+                    proc.wait_async(null, (obj, res) => {
+                        this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
+                        try { obj.wait_finish(res); } catch(e) {}
+                    });
                 }
             } catch (e) {
                 console.error(`[HotspotRouter] Failed executing command: ${e.message}`);
@@ -288,6 +296,7 @@ const HotspotRouterToggle = GObject.registerClass(
                 });
                 proc.init(null);
                 proc.communicate_utf8_async(null, null, (obj, res) => {
+                    if (this._destroyed) return;
                     try {
                         let [success, stdout] = obj.communicate_utf8_finish(res);
                         let state = stdout ? stdout.trim() : '';
@@ -308,7 +317,7 @@ const HotspotRouterToggle = GObject.registerClass(
         _updateDeviceLists() {
             let username = GLib.get_user_name();
 
-            this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
+            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
                 this._connectedSection.removeAll();
 
                 let header = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
@@ -364,7 +373,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         });
 
                         blockBtn.connect('clicked', () => {
-                            this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname], () => {
+                            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname], () => {
                                 this._updateDeviceLists();
                             });
                         });
@@ -379,7 +388,7 @@ const HotspotRouterToggle = GObject.registerClass(
             });
 
 
-            this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
+            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
                 this._blockedSection.removeAll();
 
                 let header = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
@@ -408,7 +417,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         });
 
                         unblockBtn.connect('clicked', () => {
-                            this._runCommand(['sudo', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
+                            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
                                 this._updateDeviceLists();
                             });
                         });
@@ -423,7 +432,7 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         _readAdvancedConfig() {
-            let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+            let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
             let config = { idleTimeout: 0, inhibitSleep: false };
             if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
                 try {
@@ -529,6 +538,7 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         destroy() {
+            this._destroyed = true;
             this._releaseInhibit();
             if (this._timeoutId > 0) {
                 GLib.Source.remove(this._timeoutId);
@@ -538,11 +548,28 @@ const HotspotRouterToggle = GObject.registerClass(
                 this.menu.disconnect(this._openStateId);
                 this._openStateId = 0;
             }
-            // Clean up temporary QR code file
+            // Force-kill any active subprocesses
+            for (let proc of this._activeSubprocesses) {
+                try { proc.force_exit(); } catch(e) {}
+            }
+            this._activeSubprocesses = [];
+            // Clean up temporary QR code files
             if (this._lastQrFile) {
                 try { Gio.File.new_for_path(this._lastQrFile).delete(null); } catch(e) {}
                 this._lastQrFile = null;
             }
+            // Clean up any orphaned QR files
+            try {
+                let dir = Gio.File.new_for_path('/tmp');
+                let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                let info;
+                while ((info = enumerator.next_file(null)) !== null) {
+                    let name = info.get_name();
+                    if (name.startsWith('wifi-hotspot-qr-') && name.endsWith('.png')) {
+                        try { Gio.File.new_for_path('/tmp/' + name).delete(null); } catch(e) {}
+                    }
+                }
+            } catch(e) {}
             super.destroy();
         }
     });

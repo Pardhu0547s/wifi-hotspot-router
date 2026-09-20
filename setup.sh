@@ -175,7 +175,10 @@ $IW_BIN dev ap0 del 2>/dev/null || true
 $IW_BIN dev ap1 del 2>/dev/null || true
 
 # 3. Stop conflicting standalone dnsmasq service (if present)
-$SYSTEMCTL_BIN stop dnsmasq 2>/dev/null || true
+# Only stop system dnsmasq if it's not being used by libvirt or other services
+if ! systemctl is-active --quiet libvirtd 2>/dev/null; then
+    $SYSTEMCTL_BIN stop dnsmasq 2>/dev/null || true
+fi
 
 # 4. Universal Firewall Handling across distributions
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
@@ -203,6 +206,11 @@ $SYSCTL_BIN -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
 $SYSCTL_BIN -w net.ipv4.tcp_sack=1 2>/dev/null || true
 $SYSCTL_BIN -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
 $SYSCTL_BIN -w net.ipv4.ip_no_pmtu_disc=0 2>/dev/null || true
+# Google BBR congestion control for dramatically improved throughput
+$SYSCTL_BIN -w net.core.default_qdisc=fq 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_ecn=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
 
 # TCP MSS Clamping to eliminate PMTU packet fragmentation and unlock maximum throughput
 $IPTABLES_BIN -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
@@ -347,6 +355,20 @@ elif [ -n "$DEFAULT_IFACE" ]; then
     $NMCLI_BIN dev disconnect "$WIFI_IFACE" 2>/dev/null || true
     sleep 0.5
     
+        # Smart channel selection: pick least congested 2.4GHz channel
+        BEST_CHAN=6
+        if command -v iw >/dev/null 2>&1; then
+            SCAN_RESULT=$($IW_BIN dev "$WIFI_IFACE" scan dump 2>/dev/null | grep -E 'DS Parameter set: channel' | awk '{print $NF}' | sort | uniq -c | sort -n)
+            for TEST_CHAN in 1 6 11; do
+                CHAN_COUNT=$(echo "$SCAN_RESULT" | grep " ${TEST_CHAN}$" | awk '{print $1}')
+                [ -z "$CHAN_COUNT" ] && CHAN_COUNT=0
+                if [ -z "$BEST_COUNT" ] || [ "$CHAN_COUNT" -lt "$BEST_COUNT" ]; then
+                    BEST_COUNT="$CHAN_COUNT"
+                    BEST_CHAN="$TEST_CHAN"
+                fi
+            done
+        fi
+
     if [ "$BAND" = "a" ]; then
         # Check if 5GHz transmission is permitted (free of "no IR")
         ALLOWED_5G_CHAN=""
@@ -360,12 +382,12 @@ elif [ -n "$DEFAULT_IFACE" ]; then
             MODE_LABEL="5G"
         else
             echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter without active Wi-Fi association."
-            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel 6)..."
-            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel $BEST_CHAN)..."
+            CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
             MODE_LABEL="2.4G (5G NO-IR fallback)"
         fi
     else
-        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+        CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
         MODE_LABEL="2.4G"
     fi
 
@@ -449,6 +471,9 @@ fi
 
 # Clean up any leftover virtual interface before launch
 $IW_BIN dev ap0 del 2>/dev/null || true
+
+# Store active username for hostapd_action.sh
+echo "$USER_NAME" > /tmp/wifi-hotspot-active-user 2>/dev/null || true
 
 # Execute create_ap with resilient auto-fallback
 $CREATE_AP_BIN "${CMD_ARGS[@]}"
@@ -683,10 +708,9 @@ IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
 HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
 
 if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
-    for USER_DIR in /home/*; do
-        [ ! -d "$USER_DIR" ] && continue
-        USER_NAME=$(basename "$USER_DIR")
-        DENY_FILE="$USER_DIR/.config/wifi-hotspot.deny"
+    ACTIVE_USER=$(cat /tmp/wifi-hotspot-active-user 2>/dev/null)
+    if [ -n "$ACTIVE_USER" ]; then
+        DENY_FILE="/home/$ACTIVE_USER/.config/wifi-hotspot.deny"
         if [ -f "$DENY_FILE" ] && grep -q -i "$MAC" "$DENY_FILE"; then
             CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
             $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
@@ -695,9 +719,9 @@ if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
             $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
                 $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
         else
-            /usr/local/bin/manage_hotspot_clients apply_limits "" "$USER_NAME" >/dev/null 2>&1 || true
+            /usr/local/bin/manage_hotspot_clients apply_limits "" "$ACTIVE_USER" >/dev/null 2>&1 || true
         fi
-    done
+    fi
 fi
 EOF_ACTION
 sudo chmod +x /usr/local/bin/hostapd_action.sh
@@ -713,7 +737,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/start_hotspot %i
-ExecStartPost=/bin/bash -c 'sleep 2; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; /usr/local/bin/manage_hotspot_clients apply_limits "" %i 2>/dev/null || true; CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
+ExecStartPost=/bin/bash -c 'for i in $(seq 1 20); do CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && break; sleep 0.5; done; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; /usr/local/bin/manage_hotspot_clients apply_limits "" %i 2>/dev/null || true; [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
 ExecStop=/usr/local/bin/stop_hotspot %i
 RemainAfterExit=yes
 
@@ -751,11 +775,27 @@ EOF_PKLA
 fi
 
 echo -e "\n=== Phase 5.5: Installing Sudoers Rule for manage_hotspot_clients ==="
-sudo tee /etc/sudoers.d/wifi-hotspot > /dev/null <<\EOF_SUDO
-ALL ALL=(ALL) NOPASSWD: /usr/local/bin/manage_hotspot_clients
-EOF_SUDO
-sudo chmod 440 /etc/sudoers.d/wifi-hotspot
-echo "[+] Sudoers rule installed."
+# Install Polkit action policy for manage_hotspot_clients (replaces sudoers approach)
+echo "[+] Installing Polkit policy for manage_hotspot_clients..."
+sudo tee /usr/share/polkit-1/actions/org.gnome.shell.extensions.wifi-hotspot.policy > /dev/null <<\EOF_POLKIT_POLICY
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <action id="org.gnome.shell.extensions.wifi-hotspot.manage">
+    <description>Manage Wi-Fi Hotspot Clients</description>
+    <message>Authentication is required to manage hotspot clients</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/manage_hotspot_clients</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
+EOF_POLKIT_POLICY
+# Remove legacy sudoers file if it exists
+sudo rm -f /etc/sudoers.d/wifi-hotspot 2>/dev/null || true
 
 echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<\EOF_NM

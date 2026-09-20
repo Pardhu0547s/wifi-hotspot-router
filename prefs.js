@@ -7,7 +7,13 @@ import GObject from 'gi://GObject';
 
 export default class HotspotRouterPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        let settings = this.getSettings();
+        let settings;
+        try {
+            settings = this.getSettings();
+        } catch (e) {
+            console.error(`[HotspotRouter] Failed to load GSettings schema. Run setup.sh to recompile: ${e.message}`);
+            settings = null;
+        }
         const config = this._loadSavedConfig();
 
         let hasUnsavedChanges = false;
@@ -44,6 +50,15 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             text: config.ssid
         });
         group.add(ssidRow);
+
+        // SSID validation warning
+        const ssidWarning = new Gtk.Image({
+            iconName: 'dialog-warning-symbolic',
+            visible: false,
+            tooltipText: 'SSID must be 1-32 characters, no quotes'
+        });
+        ssidWarning.add_css_class('error');
+        ssidRow.add_suffix(ssidWarning);
 
         const cryptoToggleRow = new Adw.SwitchRow({
             title: 'Enable Password Security',
@@ -108,7 +123,8 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         group.add(bandRow);
 
         const triggerSave = () => {
-            let ssid = ssidRow.get_text() || 'hotspot';
+            let ssid = (ssidRow.get_text() || 'hotspot').substring(0, 32).replace(/"/g, '');
+            if (!ssid) ssid = 'hotspot';
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
@@ -120,18 +136,27 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             if (!passValid) return;
 
             // Save the config file FIRST — this is the primary source of truth
-            this._saveConfig(ssid, usePass, pass, maxCl, band, config.dnsProfile, securityMode, config.isolateClients, config.idleTimeout, config.inhibitSleep);
+            const saveSuccess = this._saveConfig(ssid, usePass, pass, maxCl, band, config.dnsProfile, securityMode, config.isolateClients, config.idleTimeout, config.inhibitSleep);
+
+            if (!saveSuccess) {
+                // Show error feedback to user
+                saveRow.subtitle = 'Error: Failed to save configuration file. Check permissions.';
+                saveButton.sensitive = true;
+                return;
+            }
 
             // GSettings is secondary — wrap in try-catch so a stale compiled schema
             // doesn't prevent saving the config or restarting the hotspot
-            try {
-                settings.set_string('hotspot-ssid', ssid);
-                settings.set_boolean('use-password', usePass);
-                settings.set_int('max-clients', maxCl);
-                settings.set_string('hotspot-band', band);
-                settings.set_string('security-mode', securityMode);
-            } catch (e) {
-                console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
+            if (settings) {
+                try {
+                    settings.set_string('hotspot-ssid', ssid);
+                    settings.set_boolean('use-password', usePass);
+                    settings.set_int('max-clients', maxCl);
+                    settings.set_string('hotspot-band', band);
+                    settings.set_string('security-mode', securityMode);
+                } catch (e) {
+                    console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
+                }
             }
 
             hasUnsavedChanges = false;
@@ -159,9 +184,15 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
 
+            // SSID validation
+            let ssid = ssidRow.get_text() || '';
+            let ssidValid = ssid.length > 0 && ssid.length <= 32 && !ssid.includes('"');
+            ssidWarning.visible = !ssidValid;
+
             hasUnsavedChanges = true;
             saveRow.visible = true;
-            saveButton.sensitive = passValid;
+            saveRow.subtitle = 'You have modified settings. Save to apply them immediately.';
+            saveButton.sensitive = passValid && ssidValid;
         };
 
         ssidRow.connect('changed', markChanged);
@@ -188,7 +219,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
     }
 
     _loadSavedConfig() {
-        let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+        let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
         let config = {
             ssid: 'hotspot',
             usePassword: true,
@@ -233,7 +264,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
     }
 
     _saveConfig(ssid, usePassword, password, maxClients, band, dnsProfile = 'system', securityMode = 'wpa2', isolateClients = false, idleTimeout = 0, inhibitSleep = false) {
-        let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+        let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 USE_PASSWORD="${usePassword}"
 PASSWORD="${password}"
@@ -247,9 +278,11 @@ INHIBIT_SLEEP="${inhibitSleep}"
 `;
         try {
             GLib.file_set_contents(path, output);
-            GLib.chmod(path, 384);
+            GLib.chmod(path, 384); // 0600 — owner read/write only
+            return true;
         } catch (e) {
             console.error('[HotspotRouter] Error saving config: ' + e.message);
+            return false;
         }
     }
 }
