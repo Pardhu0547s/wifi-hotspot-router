@@ -258,6 +258,16 @@ MODE_LABEL="2.4G"
 HT_CAPAB_OPTS='[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
 VHT_CAPAB_OPTS='[SHORT-GI-80][MAX-A-MPDU-LEN-EXP7][RXLDPC][RX-STBC-1][TX-STBC-2BY1]'
 
+# Dynamic 2.4GHz HT capability helper (HT40+ for channels 1-7, HT40- for channels 8-13)
+get_24g_ht_capab() {
+    local ch="$1"
+    if [ "$ch" -ge 8 ] 2>/dev/null; then
+        echo '[HT40-][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+    else
+        echo '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+    fi
+}
+
 # Check if Wi-Fi hardware supports IEEE 802.11ax (HE) AP mode
 HAS_AX=0
 if [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
@@ -340,7 +350,8 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="Repeater 5G"
         else
-            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            HT_CAPAB_24G=$(get_24g_ht_capab "$CURRENT_CHAN")
+            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
             MODE_LABEL="Repeater 2.4G"
         fi
     fi
@@ -384,11 +395,13 @@ elif [ -n "$DEFAULT_IFACE" ]; then
         else
             echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter without active Wi-Fi association."
             echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel $BEST_CHAN)..."
-            CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+            HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
+            CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
             MODE_LABEL="2.4G (5G NO-IR fallback)"
         fi
     else
-        CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+        HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
+        CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
         MODE_LABEL="2.4G"
     fi
 
