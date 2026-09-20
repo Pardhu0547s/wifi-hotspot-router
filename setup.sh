@@ -303,6 +303,28 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         fi
         [ -z "$CURRENT_CHAN" ] && CURRENT_CHAN=6
         
+        # CRITICAL FIX FOR IWLWIFI AND REALTEK:
+        # create_ap's automatic virtual interface creation fails with "Device or resource busy"
+        # because it tries to change MAC address after creation.
+        # Workaround: Manually create a virtual interface (ap0), generate a guaranteed valid 
+        # locally administered MAC, bring it up, and pass it to create_ap using --no-virt.
+        $IW_BIN dev ap0 del 2>/dev/null || true
+        $IW_BIN dev "$WIFI_IFACE" interface add ap0 type __ap 2>/dev/null || true
+        
+        # Generate locally administered MAC safely
+        ORIG_MAC=$(cat "/sys/class/net/$WIFI_IFACE/address" 2>/dev/null)
+        if [ -n "$ORIG_MAC" ]; then
+            IFS=':' read -r -a MAC_BYTES <<< "$ORIG_MAC"
+            FIRST_BYTE=$(printf "%02x" $(( 16#${MAC_BYTES[0]} | 0x02 )))
+            LAST_BYTE=$(printf "%02x" $(( (16#${MAC_BYTES[5]} + 1) % 256 )))
+            NEW_MAC="${FIRST_BYTE}:${MAC_BYTES[1]}:${MAC_BYTES[2]}:${MAC_BYTES[3]}:${MAC_BYTES[4]}:${LAST_BYTE}"
+            $IP_BIN link set dev ap0 address "$NEW_MAC" 2>/dev/null || true
+        fi
+        
+        # Tell create_ap to use the pre-created ap0 without attempting virtual magic
+        CMD_ARGS+=(--no-virt)
+        WIFI_IFACE="ap0"
+        
         # Match channel and band to current Wi-Fi connection
         if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
             CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
