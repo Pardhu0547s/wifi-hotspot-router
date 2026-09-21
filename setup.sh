@@ -346,6 +346,14 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         
         # Match channel and band to current Wi-Fi connection
         if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
+            # Check if current 5GHz channel is a DFS / Radar channel (52-144)
+            if [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ]; then
+                echo "[-] ERROR: Upstream Wi-Fi is connected on 5GHz DFS Channel $CURRENT_CHAN (Radar Restricted)."
+                echo "[-] Linux kernel regulatory enforcement prohibits initiating an AP on DFS channels during single-card Wi-Fi concurrency."
+                echo "[-] Please connect to a 2.4GHz Wi-Fi network or a non-DFS 5GHz network (Channels 36-48 or 149-165)."
+                echo "Error: 5GHz DFS ($CURRENT_CHAN)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
+                exit 1
+            fi
             CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
             [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
             MODE_LABEL="Repeater 5G"
