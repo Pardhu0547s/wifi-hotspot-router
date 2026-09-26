@@ -48,6 +48,16 @@ if patch2_target in content:
 else:
     print("[!] Patch 2 target not found or already applied")
 
+# Patch 2b: Enable 802.11h DFS Spectrum Management when country_code is set
+patch2b_target = 'country_code=${COUNTRY}\nieee80211d=1'
+patch2b_replacement = 'country_code=${COUNTRY}\nieee80211d=1\nieee80211h=1'
+
+if patch2b_target in content:
+    content = content.replace(patch2b_target, patch2b_replacement, 1)
+    print("[+] Patch 2b applied: 802.11h DFS Spectrum Management enabled")
+else:
+    print("[!] Patch 2b target not found or already applied")
+
 # Patch 3: Support pure WPA3-Personal (SAE only)
 patch3_target = '''    if [[ "$WPA_VERSION" == "3" ]]; then
         # Configuring for WPA3 Transition Mode
