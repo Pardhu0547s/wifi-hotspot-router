@@ -246,12 +246,17 @@ if [ "$CURRENT_REG" = "00" ] || [ -z "$CURRENT_REG" ]; then
     [ -z "$LOCALE_COUNTRY" ] && LOCALE_COUNTRY=$(locale | grep -m1 LANG | cut -d_ -f2 | cut -d. -f1 | cut -d@ -f1)
     if [ ${#LOCALE_COUNTRY} -eq 2 ]; then
         $IW_BIN reg set "$LOCALE_COUNTRY" 2>/dev/null || true
+        CURRENT_REG="$LOCALE_COUNTRY"
     else
         $IW_BIN reg set IN 2>/dev/null || true
+        CURRENT_REG="IN"
     fi
 fi
 
 CMD_ARGS=(--ieee80211n)
+if [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ]; then
+    CMD_ARGS+=(--country "$CURRENT_REG")
+fi
 MODE_LABEL="2.4G"
 
 # Hardware-accelerated High-Throughput capabilities
@@ -299,8 +304,7 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         # Check if 5GHz transmission is permitted (free of "no IR")
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
-            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | grep -v "no IR" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
         fi
         if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
@@ -346,17 +350,27 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         
         # Match channel and band to current Wi-Fi connection
         if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-            # Check if current 5GHz channel is a DFS / Radar channel (52-144)
             if [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ]; then
-                echo "[-] ERROR: Upstream Wi-Fi is connected on 5GHz DFS Channel $CURRENT_CHAN (Radar Restricted)."
-                echo "[-] Linux kernel regulatory enforcement prohibits initiating an AP on DFS channels during single-card Wi-Fi concurrency."
-                echo "[-] Please connect to a 2.4GHz Wi-Fi network or a non-DFS 5GHz network (Channels 36-48 or 149-165)."
-                echo "Error: 5GHz DFS ($CURRENT_CHAN)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
-                exit 1
+                echo "[!] Notice: Upstream Wi-Fi is connected on 5GHz DFS Channel $CURRENT_CHAN (Radar Restricted)."
+                echo "[!] Single-card concurrency cannot perform 60s radar CAC while actively connected to Wi-Fi."
+                echo "[!] Gracefully disconnecting Wi-Fi to start dedicated AP on clean Channel 6..."
+                echo "2.4G (DFS Fallback)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
+                $NMCLI_BIN dev disconnect "$ACTIVE_WIFI_IFACE" 2>/dev/null || true
+                $NMCLI_BIN dev set "$ACTIVE_WIFI_IFACE" managed no 2>/dev/null || true
+                $IW_BIN dev ap0 del 2>/dev/null || true
+                sleep 0.5
+                WIFI_IFACE="$ACTIVE_WIFI_IFACE"
+                INTERNET_IFACE="$DEFAULT_IFACE"
+                [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$WIFI_IFACE"
+                CMD_ARGS=(--ieee80211n)
+                [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && CMD_ARGS+=(--country "$CURRENT_REG")
+                CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
+                MODE_LABEL="2.4G (DFS Fallback)"
+            else
+                CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
+                [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+                MODE_LABEL="Repeater 5G"
             fi
-            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
-            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-            MODE_LABEL="Repeater 5G"
         else
             HT_CAPAB_24G=$(get_24g_ht_capab "$CURRENT_CHAN")
             CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
@@ -373,6 +387,7 @@ elif [ -n "$DEFAULT_IFACE" ]; then
     
     # Wi-Fi radio is not connected to external network, ensure interface is clean
     $NMCLI_BIN dev disconnect "$WIFI_IFACE" 2>/dev/null || true
+    $NMCLI_BIN dev set "$WIFI_IFACE" managed no 2>/dev/null || true
     sleep 0.5
     
         # Smart channel selection: pick least congested 2.4GHz channel
@@ -393,8 +408,7 @@ elif [ -n "$DEFAULT_IFACE" ]; then
         # Check if 5GHz transmission is permitted (free of "no IR")
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
-            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | grep -v "no IR" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
@@ -503,14 +517,21 @@ echo "$USER_NAME" > /tmp/wifi-hotspot-active-user 2>/dev/null || true
 $CREATE_AP_BIN "${CMD_ARGS[@]}"
 EXIT_CODE=$?
 
-# If create_ap exited with error and 5GHz was requested, automatically recover on 2.4GHz!
-if [ $EXIT_CODE -ne 0 ] && [ "$BAND" = "a" ]; then
-    echo "[!] 5GHz startup returned exit code $EXIT_CODE. Automatically recovering on 2.4GHz..."
+# If create_ap exited with error, automatically recover on high-speed 2.4GHz!
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "[!] Hotspot startup returned exit code $EXIT_CODE. Automatically recovering on 2.4GHz..."
     echo "2.4G (Auto-Fallback)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
     $IW_BIN dev ap0 del 2>/dev/null || true
     sleep 1
 
-    FALLBACK_ARGS=(--ieee80211n -c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
+    REAL_WIFI_IFACE="${WIFI_INTERFACES[0]}"
+    $NMCLI_BIN dev disconnect "$REAL_WIFI_IFACE" 2>/dev/null || true
+    $NMCLI_BIN dev set "$REAL_WIFI_IFACE" managed no 2>/dev/null || true
+    $IW_BIN dev "${REAL_WIFI_IFACE}_ap" del 2>/dev/null || true
+
+    FALLBACK_ARGS=(--ieee80211n)
+    [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && FALLBACK_ARGS+=(--country "$CURRENT_REG")
+    FALLBACK_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
     [ -n "$DNS_SERVERS" ] && FALLBACK_ARGS+=(--dhcp-dns "$DNS_SERVERS")
     if [ "$USE_PASSWORD" = "true" ]; then
         if [ "$SECURITY_MODE" = "wpa3" ] || [ "$SECURITY_MODE" = "wpa3-only" ]; then
@@ -522,7 +543,7 @@ if [ $EXIT_CODE -ne 0 ] && [ "$BAND" = "a" ]; then
         fi
     fi
     [ "$ISOLATE_CLIENTS" = "true" ] && FALLBACK_ARGS+=(--isolate-clients)
-    FALLBACK_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
+    FALLBACK_ARGS+=("$REAL_WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
     if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
         FALLBACK_ARGS+=("$PASSWORD")
     fi
