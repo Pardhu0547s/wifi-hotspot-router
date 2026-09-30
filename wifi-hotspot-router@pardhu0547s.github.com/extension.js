@@ -168,7 +168,8 @@ const HotspotRouterToggle = GObject.registerClass(
             this._bandLabel = band;
             this.title = 'Hotspot';
             this.subtitle = this.checked ? band : 'Off';
-            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${band})`, 'Manage connected clients');
+            let statusText = this.checked ? 'Active • Manage connected clients' : 'Inactive • Manage connected clients';
+            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${band})`, statusText);
         }
 
         _updateQRCode() {
@@ -248,29 +249,29 @@ const HotspotRouterToggle = GObject.registerClass(
             let args = shouldActivate
                 ? ['systemctl', 'start', serviceName]
                 : ['systemctl', 'stop', serviceName];
+
+            this.checked = shouldActivate;
+            this._refreshBandLabel();
+
             this._runCommand(args, () => {
                 this._checkHotspotActiveState();
-                this._refreshBandLabel();
                 if (this.menu.isOpen) {
-                    this._updateDeviceLists();
+                    this._updateDeviceLists(true);
                 }
             });
         }
 
         _runCommand(args, callback = null) {
             try {
-                let proc = new Gio.Subprocess({
-                    argv: args,
-                    flags: callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE
-                });
+                let proc = Gio.Subprocess.new(args, callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE);
                 this._activeSubprocesses.push(proc);
                 if (callback) {
                     proc.communicate_utf8_async(null, null, (obj, res) => {
                         this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
                         if (this._destroyed) return;
                         try {
-                            let [success, stdout] = obj.communicate_utf8_finish(res);
-                            callback(success, stdout);
+                            let [success, stdout, stderr] = obj.communicate_utf8_finish(res);
+                            callback(true, stdout);
                         } catch (err) {
                             callback(false, null);
                         }
@@ -288,49 +289,42 @@ const HotspotRouterToggle = GObject.registerClass(
         }
 
         _checkHotspotActiveState() {
-            try {
-                let username = GLib.get_user_name();
-                let proc = new Gio.Subprocess({
-                    argv: ['systemctl', 'is-active', `wifi-hotspot@${username}.service`],
-                    flags: Gio.SubprocessFlags.STDOUT_PIPE
-                });
-                this._activeSubprocesses.push(proc);
-                proc.communicate_utf8_async(null, null, (obj, res) => {
-                    this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
-                    if (this._destroyed) return;
-                    try {
-                        let [success, stdout] = obj.communicate_utf8_finish(res);
-                        let state = stdout ? stdout.trim() : '';
-                        let active = success && (state === 'active' || state === 'activating');
-                        if (this.checked !== active) {
-                            this.checked = active;
-                            this._refreshBandLabel();
-                        }
-                    } catch (err) {
-                        /* ignore */
-                    }
-                });
-            } catch (e) {
-                /* ignore */
-            }
+            let username = GLib.get_user_name();
+            this._runCommand(['systemctl', 'is-active', `wifi-hotspot@${username}.service`], (success, stdout) => {
+                let state = stdout ? stdout.trim() : '';
+                let active = (state === 'active' || state === 'activating' || state === 'reloading');
+                if (this.checked !== active) {
+                    this.checked = active;
+                }
+                this._refreshBandLabel();
+            });
         }
 
-        _updateDeviceLists() {
+        _updateDeviceLists(updateUi = true) {
             let username = GLib.get_user_name();
 
             this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
+                let activeCount = 0;
+                if (success && stdout && stdout.trim()) {
+                    let lines = stdout.trim().split('\n');
+                    for (let line of lines) {
+                        if (line.trim()) activeCount++;
+                    }
+                }
+                this._clientCount = activeCount;
+
+                if (!updateUi) return;
+
                 this._connectedSection.removeAll();
 
                 let header = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
                 header.label.add_style_class_name('bold');
                 this._connectedSection.addMenuItem(header);
 
-                let activeCount = 0;
                 if (success && stdout && stdout.trim()) {
                     let lines = stdout.trim().split('\n');
                     for (let line of lines) {
                         if (!line) continue;
-                        activeCount++;
                         let parts = line.split('|');
                         let mac = parts[0];
                         let hostname = parts.length > 1 ? parts[1] : mac;
@@ -375,7 +369,7 @@ const HotspotRouterToggle = GObject.registerClass(
 
                         blockBtn.connect('clicked', () => {
                             this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname], () => {
-                                this._updateDeviceLists();
+                                this._updateDeviceLists(true);
                             });
                         });
                         item.add_child(blockBtn);
@@ -385,51 +379,51 @@ const HotspotRouterToggle = GObject.registerClass(
                     let item = new PopupMenu.PopupMenuItem('No devices connected', { reactive: false });
                     this._connectedSection.addMenuItem(item);
                 }
-                this._clientCount = activeCount;
             });
 
+            if (updateUi) {
+                this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
+                    this._blockedSection.removeAll();
 
-            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
-                this._blockedSection.removeAll();
+                    let header = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
+                    header.label.add_style_class_name('bold');
+                    this._blockedSection.addMenuItem(header);
 
-                let header = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
-                header.label.add_style_class_name('bold');
-                this._blockedSection.addMenuItem(header);
+                    if (success && stdout && stdout.trim()) {
+                        let lines = stdout.trim().split('\n');
+                        for (let line of lines) {
+                            if (!line) continue;
+                            let parts = line.split('|');
+                            let mac = parts[0];
+                            let hostname = parts.length > 1 ? parts[1] : mac;
 
-                if (success && stdout && stdout.trim()) {
-                    let lines = stdout.trim().split('\n');
-                    for (let line of lines) {
-                        if (!line) continue;
-                        let parts = line.split('|');
-                        let mac = parts[0];
-                        let hostname = parts.length > 1 ? parts[1] : mac;
+                            let item = new PopupMenu.PopupMenuItem(hostname, { reactive: false });
 
-                        let item = new PopupMenu.PopupMenuItem(hostname, { reactive: false });
-
-                        let unblockBtn = new St.Button({
-                            style_class: 'button',
-                            child: new St.Label({
-                                text: 'Unblock',
-                                style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
-                            }),
-                            style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 65px; height: 24px;',
-                            x_align: Clutter.ActorAlign.CENTER,
-                            y_align: Clutter.ActorAlign.CENTER,
-                        });
-
-                        unblockBtn.connect('clicked', () => {
-                            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
-                                this._updateDeviceLists();
+                            let unblockBtn = new St.Button({
+                                style_class: 'button',
+                                child: new St.Label({
+                                    text: 'Unblock',
+                                    style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
+                                }),
+                                style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 65px; height: 24px;',
+                                x_align: Clutter.ActorAlign.CENTER,
+                                y_align: Clutter.ActorAlign.CENTER,
                             });
-                        });
-                        item.add_child(unblockBtn);
+
+                            unblockBtn.connect('clicked', () => {
+                                this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
+                                    this._updateDeviceLists(true);
+                                });
+                            });
+                            item.add_child(unblockBtn);
+                            this._blockedSection.addMenuItem(item);
+                        }
+                    } else {
+                        let item = new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false });
                         this._blockedSection.addMenuItem(item);
                     }
-                } else {
-                    let item = new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false });
-                    this._blockedSection.addMenuItem(item);
-                }
-            });
+                });
+            }
         }
 
         _readAdvancedConfig() {
@@ -461,8 +455,8 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
                 this._checkHotspotActiveState();
-                if (this.menu.isOpen) {
-                    this._updateDeviceLists();
+                if (this.checked) {
+                    this._updateDeviceLists(this.menu.isOpen);
                 }
 
                 // Background idle timeout & sleep inhibitor handling

@@ -11,6 +11,7 @@ Applies two patches:
 import sys
 import os
 import shutil
+import re
 
 filepath = sys.argv[1] if len(sys.argv) > 1 else (shutil.which('create_ap') or '/usr/bin/create_ap')
 
@@ -39,14 +40,14 @@ else:
     print("[!] Patch 1 target not found or already applied")
 
 # Patch 2: Comment out the 'no IR' check to allow 5GHz AP
-patch2_target = '        [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1'
-patch2_replacement = '        # [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1  # Patched: allow 5GHz AP on IR-CONCURRENT channels'
-
-if patch2_target in content:
-    content = content.replace(patch2_target, patch2_replacement, 1)
+patch2_pattern = re.compile(r'^\s*\[\[\s*"\${CHANNEL_INFO}"\s*==\s*\*no\\?\s+IR\*\s*\]\]\s*&&\s*return\s+1', re.MULTILINE)
+if patch2_pattern.search(content):
+    content = patch2_pattern.sub(r'        # [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1  # Patched: allow 5GHz AP on IR-CONCURRENT channels', content, count=1)
     print("[+] Patch 2 applied: 5GHz IR-CONCURRENT AP support")
+elif 'Patched: allow 5GHz AP on IR-CONCURRENT channels' in content:
+    print("[+] Patch 2 already applied: 5GHz IR-CONCURRENT AP support")
 else:
-    print("[!] Patch 2 target not found or already applied")
+    print("[!] Patch 2 target not found")
 
 # Patch 2b: Enable 802.11h DFS Spectrum Management when country_code is set
 patch2b_target = 'country_code=${COUNTRY}\nieee80211d=1'

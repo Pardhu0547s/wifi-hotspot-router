@@ -38,6 +38,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         saveRow.add_suffix(saveButton);
         actionGroup.add(saveRow);
         saveRow.visible = false;
+        actionGroup.visible = false;
 
         const group = new Adw.PreferencesGroup({
             title: 'Network Parameters Configuration',
@@ -223,6 +224,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
             hasUnsavedChanges = false;
             saveRow.visible = false;
+            actionGroup.visible = false;
             saveButton.sensitive = false;
 
             try {
@@ -251,6 +253,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             ssidWarning.visible = !ssidValid;
 
             hasUnsavedChanges = true;
+            actionGroup.visible = true;
             saveRow.visible = true;
             saveRow.subtitle = 'You have modified settings. Save to apply them immediately.';
             saveButton.sensitive = passValid && ssidValid;
@@ -266,6 +269,24 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         isolateRow.connect('notify::active', markChanged);
         idleTimeoutRow.connect('notify::selected', markChanged);
         inhibitSleepRow.connect('notify::active', markChanged);
+
+        const donationsGroup = new Adw.PreferencesGroup({
+            title: 'Support & Contributions',
+            description: 'Support ongoing open-source development and maintenance'
+        });
+        page.add(donationsGroup);
+
+        const donationsRow = new Adw.ActionRow({
+            title: 'Support This Project',
+            subtitle: 'Donate or star the repository on GitHub to support development'
+        });
+        const linkButton = new Gtk.LinkButton({
+            label: 'Donate / GitHub',
+            uri: 'https://github.com/Pardhu0547s/wifi-hotspot-router',
+            valign: Gtk.Align.CENTER
+        });
+        donationsRow.add_suffix(linkButton);
+        donationsGroup.add(donationsRow);
 
         window.connect('close-request', () => {
             if (hasUnsavedChanges) {

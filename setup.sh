@@ -253,7 +253,25 @@ if [ "$CURRENT_REG" = "00" ] || [ -z "$CURRENT_REG" ]; then
     fi
 fi
 
-CMD_ARGS=(--ieee80211n)
+# Dynamic subnet collision prevention helper
+get_safe_gateway() {
+    local existing_routes existing_addrs candidate net_prefix
+    existing_routes=$($IP_BIN -4 route show 2>/dev/null | awk '{print $1}')
+    existing_addrs=$($IP_BIN -4 addr show 2>/dev/null | awk '/inet /{print $2}')
+
+    for candidate in "192.168.12.1" "192.168.199.1" "192.168.188.1" "192.168.177.1" "10.0.99.1"; do
+        net_prefix=$(echo "$candidate" | cut -d. -f1-3)
+        if ! echo "$existing_routes $existing_addrs" | grep -q "$net_prefix"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    echo "192.168.199.1"
+}
+
+SAFE_GATEWAY=$(get_safe_gateway)
+
+CMD_ARGS=(--ieee80211n -g "$SAFE_GATEWAY")
 if [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ]; then
     CMD_ARGS+=(--country "$CURRENT_REG")
 fi
@@ -529,7 +547,10 @@ if [ $EXIT_CODE -ne 0 ]; then
     $NMCLI_BIN dev set "$REAL_WIFI_IFACE" managed no 2>/dev/null || true
     $IW_BIN dev "${REAL_WIFI_IFACE}_ap" del 2>/dev/null || true
 
-    FALLBACK_ARGS=(--ieee80211n)
+    INTERNET_IFACE="$DEFAULT_IFACE"
+    [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$REAL_WIFI_IFACE"
+
+    FALLBACK_ARGS=(--ieee80211n -g "$SAFE_GATEWAY")
     [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && FALLBACK_ARGS+=(--country "$CURRENT_REG")
     FALLBACK_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
     [ -n "$DNS_SERVERS" ] && FALLBACK_ARGS+=(--dhcp-dns "$DNS_SERVERS")
@@ -558,8 +579,12 @@ sudo chmod +x /usr/local/bin/start_hotspot
 sudo tee /usr/local/bin/stop_hotspot > /dev/null <<\EOF_STOP
 #!/bin/bash
 IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
+IP_BIN=$(command -v ip || echo "/usr/bin/ip")
 CREATE_AP_BIN=$(command -v create_ap || echo "/usr/bin/create_ap")
 NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
+
+$CREATE_AP_BIN --stop ap0 2>/dev/null || true
+$CREATE_AP_BIN --stop ap1 2>/dev/null || true
 
 for instance in /tmp/create_ap.*; do
     if [ -d "$instance" ]; then
@@ -583,6 +608,9 @@ $IW_BIN dev ap1 del 2>/dev/null || true
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
     ufw route delete allow in on ap0 2>/dev/null || true
     ufw delete allow in on ap0 2>/dev/null || true
+    for iface in $($IP_BIN -o link show 2>/dev/null | awk -F': ' '{print $2}' | awk '{print $1}'); do
+        ufw route delete allow in on ap0 out on "$iface" 2>/dev/null || true
+    done
 fi
 
 # Firewalld cleanup
