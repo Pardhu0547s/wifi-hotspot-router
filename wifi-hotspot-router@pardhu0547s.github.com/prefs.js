@@ -7,7 +7,13 @@ import GObject from 'gi://GObject';
 
 export default class HotspotRouterPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        let settings = this.getSettings();
+        let settings;
+        try {
+            settings = this.getSettings();
+        } catch (e) {
+            console.error(`[HotspotRouter] Failed to load GSettings schema. Run setup.sh to recompile: ${e.message}`);
+            settings = null;
+        }
         const config = this._loadSavedConfig();
 
         let hasUnsavedChanges = false;
@@ -45,8 +51,17 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         group.add(ssidRow);
 
+        // SSID validation warning
+        const ssidWarning = new Gtk.Image({
+            iconName: 'dialog-warning-symbolic',
+            visible: false,
+            tooltipText: 'SSID must be 1-32 characters, no quotes'
+        });
+        ssidWarning.add_css_class('error');
+        ssidRow.add_suffix(ssidWarning);
+
         const cryptoToggleRow = new Adw.SwitchRow({
-            title: 'Enable Password Security (WPA2-PSK)',
+            title: 'Enable Password Security',
             active: config.usePassword
         });
         group.add(cryptoToggleRow);
@@ -65,7 +80,23 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         warningIcon.add_css_class('error');
         passwordRow.add_suffix(warningIcon);
 
+        const secModel = new Gtk.StringList();
+        secModel.append('WPA2-PSK (Standard / Maximum Compatibility)');
+        secModel.append('WPA2 / WPA3-SAE Mixed Mode (Recommended)');
+        secModel.append('WPA3-Personal Only (SAE)');
+        const secProfiles = ['wpa2', 'wpa3-mixed', 'wpa3'];
+        let initialSecIdx = secProfiles.indexOf(config.securityMode);
+        if (initialSecIdx < 0) initialSecIdx = 0;
+        const secRow = new Adw.ComboRow({
+            title: 'Security Encryption Protocol',
+            subtitle: 'Select WPA3 for enhanced security against password guessing on supported devices',
+            model: secModel,
+            selected: initialSecIdx
+        });
+        group.add(secRow);
+
         cryptoToggleRow.bind_property('active', passwordRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
+        cryptoToggleRow.bind_property('active', secRow, 'visible', GObject.BindingFlags.DEFAULT | GObject.BindingFlags.SYNC_CREATE);
 
         const maxClientsAdjustment = new Gtk.Adjustment({
             lower: 1,
@@ -80,34 +111,115 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         group.add(clientLimitRow);
 
+        const bandModel = new Gtk.StringList();
+        bandModel.append('2.4 GHz');
+        bandModel.append('5 GHz');
+        const bandRow = new Adw.ComboRow({
+            title: 'Wi-Fi Band',
+            subtitle: 'Frequency band for Ethernet or offline sharing. (When repeating active Wi-Fi, the band matches your Wi-Fi network)',
+            model: bandModel,
+            selected: config.band === 'a' ? 1 : 0
+        });
+        group.add(bandRow);
 
-        const donationsRow = new Adw.ActionRow({
-            title: 'Support This Project',
-            subtitle: 'Donate or star the repository to support development'
+        const advGroup = new Adw.PreferencesGroup({
+            title: 'Advanced & Power Policy Configuration',
+            description: 'Tune DNS filtering profiles, network isolation, and sleep management'
         });
-        const linkButton = new Gtk.LinkButton({
-            label: 'Donate / Github',
-            uri: 'https://github.com/Pardhu0547s/wifi-hotspot-router',
-            valign: Gtk.Align.CENTER
+        page.add(advGroup);
+
+        const dnsModel = new Gtk.StringList();
+        dnsModel.append('System Default (Inherit Upstream Network DNS)');
+        dnsModel.append('Cloudflare Privacy (1.1.1.1)');
+        dnsModel.append('AdGuard Family & Ad-Blocking (94.140.14.14)');
+        dnsModel.append('Quad9 Secure (9.9.9.9)');
+        dnsModel.append('Google Public DNS (8.8.8.8)');
+        const dnsProfiles = ['system', 'cloudflare', 'adguard', 'quad9', 'google'];
+        let initialDnsIdx = dnsProfiles.indexOf(config.dnsProfile);
+        if (initialDnsIdx < 0) initialDnsIdx = 0;
+        const dnsRow = new Adw.ComboRow({
+            title: 'Upstream DNS & Filtering Profile',
+            subtitle: 'Assign custom DNS resolving or network-wide ad blocking to connected stations',
+            model: dnsModel,
+            selected: initialDnsIdx
         });
-        donationsRow.add_suffix(linkButton);
-        group.add(donationsRow);
+        advGroup.add(dnsRow);
+
+        const isolateRow = new Adw.SwitchRow({
+            title: 'Isolate Connected Clients (AP Isolation)',
+            subtitle: 'Prevent connected Wi-Fi devices from seeing or communicating with each other directly',
+            active: config.isolateClients
+        });
+        advGroup.add(isolateRow);
+
+        const idleModel = new Gtk.StringList();
+        idleModel.append('Disabled (Always Stay On)');
+        idleModel.append('5 Minutes');
+        idleModel.append('10 Minutes');
+        idleModel.append('15 Minutes');
+        idleModel.append('30 Minutes');
+        const idleTimeouts = [0, 5, 10, 15, 30];
+        let initialIdleIdx = idleTimeouts.indexOf(config.idleTimeout);
+        if (initialIdleIdx < 0) initialIdleIdx = 0;
+        const idleTimeoutRow = new Adw.ComboRow({
+            title: 'Auto-Turn Off When Idle',
+            subtitle: 'Automatically disable hotspot after specified period when zero devices are connected',
+            model: idleModel,
+            selected: initialIdleIdx
+        });
+        advGroup.add(idleTimeoutRow);
+
+        const inhibitSleepRow = new Adw.SwitchRow({
+            title: 'Prevent System Sleep While Active',
+            subtitle: 'Inhibit laptop suspend/sleep when hardware stations are actively connected',
+            active: config.inhibitSleep
+        });
+        advGroup.add(inhibitSleepRow);
 
         const triggerSave = () => {
-            let ssid = ssidRow.get_text() || 'hotspot';
+            let ssid = (ssidRow.get_text() || 'hotspot').substring(0, 32).replace(/"/g, '');
+            if (!ssid) ssid = 'hotspot';
             let usePass = cryptoToggleRow.active;
             let pass = passwordRow.get_text() || '';
             let maxCl = Math.round(maxClientsAdjustment.value);
+            let band = bandRow.selected === 1 ? 'a' : 'bg';
+            let securityMode = secProfiles[secRow.selected] || 'wpa2';
+            let dnsProfile = dnsProfiles[dnsRow.selected] || 'system';
+            let isolateClients = isolateRow.active;
+            let idleTimeout = idleTimeouts[idleTimeoutRow.selected] || 0;
+            let inhibitSleep = inhibitSleepRow.active;
 
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
             if (!passValid) return;
 
-            settings.set_string('hotspot-ssid', ssid);
-            settings.set_boolean('use-password', usePass);
-            settings.set_int('max-clients', maxCl);
+            // Save the config file FIRST — this is the primary source of truth
+            const saveSuccess = this._saveConfig(ssid, usePass, pass, maxCl, band, dnsProfile, securityMode, isolateClients, idleTimeout, inhibitSleep);
 
-            this._saveConfig(ssid, usePass, pass, maxCl);
+            if (!saveSuccess) {
+                // Show error feedback to user
+                saveRow.subtitle = 'Error: Failed to save configuration file. Check permissions.';
+                saveButton.sensitive = true;
+                return;
+            }
+
+            // GSettings is secondary — wrap in try-catch so a stale compiled schema
+            // doesn't prevent saving the config or restarting the hotspot
+            if (settings) {
+                try {
+                    settings.set_string('hotspot-ssid', ssid);
+                    settings.set_boolean('use-password', usePass);
+                    settings.set_int('max-clients', maxCl);
+                    settings.set_string('hotspot-band', band);
+                    settings.set_string('security-mode', securityMode);
+                    settings.set_string('dns-profile', dnsProfile);
+                    settings.set_boolean('isolate-clients', isolateClients);
+                    settings.set_int('idle-timeout', idleTimeout);
+                    settings.set_boolean('inhibit-sleep', inhibitSleep);
+                } catch (e) {
+                    console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
+                }
+            }
 
             hasUnsavedChanges = false;
             saveRow.visible = false;
@@ -119,10 +231,9 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                     argv: ['systemctl', 'try-restart', `wifi-hotspot@${username}.service`],
                     flags: Gio.SubprocessFlags.NONE
                 });
-                proc.init(null);
                 proc.wait_async(null, null);
             } catch (e) {
-                console.error(e);
+                console.error(`[HotspotRouter] Error restarting service: ${e.message || e}`);
             }
         };
 
@@ -134,38 +245,38 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
 
+            // SSID validation
+            let ssid = ssidRow.get_text() || '';
+            let ssidValid = ssid.length > 0 && ssid.length <= 32 && !ssid.includes('"');
+            ssidWarning.visible = !ssidValid;
+
             hasUnsavedChanges = true;
             saveRow.visible = true;
-            saveButton.sensitive = passValid;
+            saveRow.subtitle = 'You have modified settings. Save to apply them immediately.';
+            saveButton.sensitive = passValid && ssidValid;
         };
 
         ssidRow.connect('changed', markChanged);
         cryptoToggleRow.connect('notify::active', markChanged);
         passwordRow.connect('changed', markChanged);
         maxClientsAdjustment.connect('value-changed', markChanged);
+        bandRow.connect('notify::selected', markChanged);
+        secRow.connect('notify::selected', markChanged);
+        dnsRow.connect('notify::selected', markChanged);
+        isolateRow.connect('notify::active', markChanged);
+        idleTimeoutRow.connect('notify::selected', markChanged);
+        inhibitSleepRow.connect('notify::active', markChanged);
 
-        window.connect('close-request', (win) => {
+        window.connect('close-request', () => {
             if (hasUnsavedChanges) {
-                let dialog = new Adw.MessageDialog({
-                    heading: 'Unsaved Changes',
-                    body: 'You have modified your hotspot settings. Do you want to save them and restart the hotspot, or discard the changes?',
-                    transient_for: win
-                });
-                dialog.add_response('discard', 'Discard');
-                dialog.add_response('save', 'Save & Apply');
-                dialog.set_response_appearance('discard', Adw.ResponseAppearance.DESTRUCTIVE);
-                dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
-
-                dialog.connect('response', (dlg, response) => {
-                    if (response === 'save') {
-                        triggerSave();
-                    }
-                    hasUnsavedChanges = false;
-                    win.close();
-                });
-
-                dialog.present();
-                return true;
+                let usePass = cryptoToggleRow.active;
+                let pass = passwordRow.get_text() || '';
+                let passValid = !usePass || (pass.length >= 8);
+                let ssid = ssidRow.get_text() || '';
+                let ssidValid = ssid.length > 0 && ssid.length <= 32 && !ssid.includes('"');
+                if (passValid && ssidValid) {
+                    triggerSave();
+                }
             }
             return false;
         });
@@ -175,12 +286,18 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
     }
 
     _loadSavedConfig() {
-        let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+        let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
         let config = {
             ssid: 'hotspot',
             usePassword: true,
             password: '',
-            maxClients: 10
+            maxClients: 10,
+            band: 'bg',
+            dnsProfile: 'system',
+            securityMode: 'wpa2',
+            isolateClients: false,
+            idleTimeout: 0,
+            inhibitSleep: false
         };
 
         if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
@@ -197,6 +314,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                             else if (key === 'USE_PASSWORD') config.usePassword = (value === 'true');
                             else if (key === 'PASSWORD') config.password = value;
                             else if (key === 'MAX_CLIENTS') config.maxClients = parseInt(value, 10) || 10;
+                            else if (key === 'BAND') config.band = value;
+                            else if (key === 'DNS_PROFILE') config.dnsProfile = value;
+                            else if (key === 'SECURITY_MODE') config.securityMode = value;
+                            else if (key === 'ISOLATE_CLIENTS') config.isolateClients = (value === 'true');
+                            else if (key === 'IDLE_TIMEOUT') config.idleTimeout = parseInt(value, 10) || 0;
+                            else if (key === 'INHIBIT_SLEEP') config.inhibitSleep = (value === 'true');
                         }
                     }
                 }
@@ -207,18 +330,26 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         return config;
     }
 
-    _saveConfig(ssid, usePassword, password, maxClients) {
-        let path = GLib.get_home_dir() + '/.config/wifi-hotspot.conf';
+    _saveConfig(ssid, usePassword, password, maxClients, band, dnsProfile = 'system', securityMode = 'wpa2', isolateClients = false, idleTimeout = 0, inhibitSleep = false) {
+        let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 USE_PASSWORD="${usePassword}"
 PASSWORD="${password}"
 MAX_CLIENTS="${maxClients}"
+BAND="${band}"
+DNS_PROFILE="${dnsProfile}"
+SECURITY_MODE="${securityMode}"
+ISOLATE_CLIENTS="${isolateClients}"
+IDLE_TIMEOUT="${idleTimeout}"
+INHIBIT_SLEEP="${inhibitSleep}"
 `;
         try {
             GLib.file_set_contents(path, output);
-            GLib.chmod(path, 384);
+            GLib.chmod(path, 384); // 0600 — owner read/write only
+            return true;
         } catch (e) {
             console.error('[HotspotRouter] Error saving config: ' + e.message);
+            return false;
         }
     }
 }

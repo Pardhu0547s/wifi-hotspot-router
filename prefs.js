@@ -122,6 +122,60 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         group.add(bandRow);
 
+        const advGroup = new Adw.PreferencesGroup({
+            title: 'Advanced & Power Policy Configuration',
+            description: 'Tune DNS filtering profiles, network isolation, and sleep management'
+        });
+        page.add(advGroup);
+
+        const dnsModel = new Gtk.StringList();
+        dnsModel.append('System Default (Inherit Upstream Network DNS)');
+        dnsModel.append('Cloudflare Privacy (1.1.1.1)');
+        dnsModel.append('AdGuard Family & Ad-Blocking (94.140.14.14)');
+        dnsModel.append('Quad9 Secure (9.9.9.9)');
+        dnsModel.append('Google Public DNS (8.8.8.8)');
+        const dnsProfiles = ['system', 'cloudflare', 'adguard', 'quad9', 'google'];
+        let initialDnsIdx = dnsProfiles.indexOf(config.dnsProfile);
+        if (initialDnsIdx < 0) initialDnsIdx = 0;
+        const dnsRow = new Adw.ComboRow({
+            title: 'Upstream DNS & Filtering Profile',
+            subtitle: 'Assign custom DNS resolving or network-wide ad blocking to connected stations',
+            model: dnsModel,
+            selected: initialDnsIdx
+        });
+        advGroup.add(dnsRow);
+
+        const isolateRow = new Adw.SwitchRow({
+            title: 'Isolate Connected Clients (AP Isolation)',
+            subtitle: 'Prevent connected Wi-Fi devices from seeing or communicating with each other directly',
+            active: config.isolateClients
+        });
+        advGroup.add(isolateRow);
+
+        const idleModel = new Gtk.StringList();
+        idleModel.append('Disabled (Always Stay On)');
+        idleModel.append('5 Minutes');
+        idleModel.append('10 Minutes');
+        idleModel.append('15 Minutes');
+        idleModel.append('30 Minutes');
+        const idleTimeouts = [0, 5, 10, 15, 30];
+        let initialIdleIdx = idleTimeouts.indexOf(config.idleTimeout);
+        if (initialIdleIdx < 0) initialIdleIdx = 0;
+        const idleTimeoutRow = new Adw.ComboRow({
+            title: 'Auto-Turn Off When Idle',
+            subtitle: 'Automatically disable hotspot after specified period when zero devices are connected',
+            model: idleModel,
+            selected: initialIdleIdx
+        });
+        advGroup.add(idleTimeoutRow);
+
+        const inhibitSleepRow = new Adw.SwitchRow({
+            title: 'Prevent System Sleep While Active',
+            subtitle: 'Inhibit laptop suspend/sleep when hardware stations are actively connected',
+            active: config.inhibitSleep
+        });
+        advGroup.add(inhibitSleepRow);
+
         const triggerSave = () => {
             let ssid = (ssidRow.get_text() || 'hotspot').substring(0, 32).replace(/"/g, '');
             if (!ssid) ssid = 'hotspot';
@@ -130,13 +184,17 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let maxCl = Math.round(maxClientsAdjustment.value);
             let band = bandRow.selected === 1 ? 'a' : 'bg';
             let securityMode = secProfiles[secRow.selected] || 'wpa2';
+            let dnsProfile = dnsProfiles[dnsRow.selected] || 'system';
+            let isolateClients = isolateRow.active;
+            let idleTimeout = idleTimeouts[idleTimeoutRow.selected] || 0;
+            let inhibitSleep = inhibitSleepRow.active;
 
             let passValid = !usePass || (pass.length >= 8);
             warningIcon.visible = !passValid;
             if (!passValid) return;
 
             // Save the config file FIRST — this is the primary source of truth
-            const saveSuccess = this._saveConfig(ssid, usePass, pass, maxCl, band, config.dnsProfile, securityMode, config.isolateClients, config.idleTimeout, config.inhibitSleep);
+            const saveSuccess = this._saveConfig(ssid, usePass, pass, maxCl, band, dnsProfile, securityMode, isolateClients, idleTimeout, inhibitSleep);
 
             if (!saveSuccess) {
                 // Show error feedback to user
@@ -154,6 +212,10 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                     settings.set_int('max-clients', maxCl);
                     settings.set_string('hotspot-band', band);
                     settings.set_string('security-mode', securityMode);
+                    settings.set_string('dns-profile', dnsProfile);
+                    settings.set_boolean('isolate-clients', isolateClients);
+                    settings.set_int('idle-timeout', idleTimeout);
+                    settings.set_boolean('inhibit-sleep', inhibitSleep);
                 } catch (e) {
                     console.error(`[HotspotRouter] GSettings write error (run setup.sh to recompile schemas): ${e.message}`);
                 }
@@ -169,10 +231,9 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                     argv: ['systemctl', 'try-restart', `wifi-hotspot@${username}.service`],
                     flags: Gio.SubprocessFlags.NONE
                 });
-                proc.init(null);
                 proc.wait_async(null, null);
             } catch (e) {
-                console.error(e);
+                console.error(`[HotspotRouter] Error restarting service: ${e.message || e}`);
             }
         };
 
@@ -201,13 +262,19 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         maxClientsAdjustment.connect('value-changed', markChanged);
         bandRow.connect('notify::selected', markChanged);
         secRow.connect('notify::selected', markChanged);
+        dnsRow.connect('notify::selected', markChanged);
+        isolateRow.connect('notify::active', markChanged);
+        idleTimeoutRow.connect('notify::selected', markChanged);
+        inhibitSleepRow.connect('notify::active', markChanged);
 
         window.connect('close-request', () => {
             if (hasUnsavedChanges) {
                 let usePass = cryptoToggleRow.active;
                 let pass = passwordRow.get_text() || '';
                 let passValid = !usePass || (pass.length >= 8);
-                if (passValid) {
+                let ssid = ssidRow.get_text() || '';
+                let ssidValid = ssid.length > 0 && ssid.length <= 32 && !ssid.includes('"');
+                if (passValid && ssidValid) {
                     triggerSave();
                 }
             }

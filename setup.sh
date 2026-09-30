@@ -31,7 +31,7 @@ fi
 
 # Ensure essential tools exist
 MISSING_TOOLS=()
-for tool in hostapd dnsmasq iw iptables ip qrencode glib-compile-schemas python3; do
+for tool in hostapd dnsmasq iw iptables ip qrencode glib-compile-schemas python3 pkexec; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         MISSING_TOOLS+=("$tool")
     fi
@@ -43,16 +43,16 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
     case "$PKG_MGR" in
         apt)
             sudo apt-get update -y || true
-            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 libglib2.0-bin procps
+            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 libglib2.0-bin procps policykit-1
             ;;
         dnf)
-            sudo dnf install -y hostapd dnsmasq iw iptables iproute qrencode python3 glib2-devel procps-ng
+            sudo dnf install -y hostapd dnsmasq iw iptables iproute qrencode python3 glib2-devel procps-ng polkit
             ;;
         pacman)
-            sudo pacman -Sy --noconfirm hostapd dnsmasq iw iptables iproute2 qrencode python glib2 procps-ng
+            sudo pacman -Sy --noconfirm hostapd dnsmasq iw iptables iproute2 qrencode python glib2 procps-ng polkit
             ;;
         zypper)
-            sudo zypper install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 glib2-devel procps
+            sudo zypper install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 glib2-devel procps polkit
             ;;
         *)
             echo "[-] Warning: Unknown package manager. Please ensure the following packages are installed manually: ${MISSING_TOOLS[*]}"
@@ -301,10 +301,10 @@ if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
         done
         [ -z "$WIFI_IFACE" ] && WIFI_IFACE="${WIFI_INTERFACES[0]}"
 
-        # Check if 5GHz transmission is permitted (free of "no IR")
+        # Check if 5GHz transmission is permitted
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | grep -v "no IR" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
         fi
         if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
@@ -405,10 +405,10 @@ elif [ -n "$DEFAULT_IFACE" ]; then
         fi
 
     if [ "$BAND" = "a" ]; then
-        # Check if 5GHz transmission is permitted (free of "no IR")
+        # Check if 5GHz transmission is permitted
         ALLOWED_5G_CHAN=""
         if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | grep -v "no IR" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
         fi
         if [ -n "$ALLOWED_5G_CHAN" ]; then
             CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
@@ -560,6 +560,15 @@ sudo tee /usr/local/bin/stop_hotspot > /dev/null <<\EOF_STOP
 IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
 CREATE_AP_BIN=$(command -v create_ap || echo "/usr/bin/create_ap")
 NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
+
+for instance in /tmp/create_ap.*; do
+    if [ -d "$instance" ]; then
+        ifile=$(basename "$instance" | cut -d. -f2)
+        if [ -n "$ifile" ] && [ "$ifile" != "*" ]; then
+            $CREATE_AP_BIN --stop "$ifile" 2>/dev/null || true
+        fi
+    fi
+done
 
 for w in $($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]'); do
     $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
@@ -731,8 +740,10 @@ elif [ "$ACTION" = "unblock" ]; then
         $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1 || true
     fi
 
-    while $IPTABLES_BIN -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
-    while $IPTABLES_BIN -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+    if [ -n "$MAC" ]; then
+        while $IPTABLES_BIN -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+        while $IPTABLES_BIN -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+    fi
 elif [ "$ACTION" = "list_blocked" ]; then
     if [ -f "$DENY_FILE" ]; then
         cat "$DENY_FILE"

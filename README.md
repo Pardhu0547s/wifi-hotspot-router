@@ -123,17 +123,19 @@ polkit.addRule(function(action, subject) {
 });
 ```
 
-#### 3. Sudoers Rule (Client Management)
-A narrowly scoped sudoers rule is installed at `/etc/sudoers.d/wifi-hotspot`. It grants **passwordless execution of exactly one script** — `/usr/local/bin/manage_hotspot_clients` — and nothing else. This script is a fixed, pre-installed shell script (not user-modifiable at runtime) that handles listing connected devices, blocking MACs, and unblocking MACs.
+#### 3. Polkit Policy (Client Management)
+A Polkit action policy is installed at `/usr/share/polkit-1/actions/org.gnome.shell.extensions.wifi-hotspot.policy`. It authorizes **passwordless execution of exactly one binary** — `/usr/local/bin/manage_hotspot_clients` — and nothing else. This script is a fixed, pre-installed shell script (not user-modifiable at runtime) that handles listing connected devices, blocking MACs, and unblocking MACs.
 
-```
-# Sudoers rule (installed by setup.sh)
-ALL ALL=(ALL) NOPASSWD: /usr/local/bin/manage_hotspot_clients
+```xml
+<!-- Installed by setup.sh -->
+<action id="org.gnome.shell.extensions.wifi-hotspot.manage">
+  <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/manage_hotspot_clients</annotate>
+</action>
 ```
 
 The extension invokes it as:
 ```
-extension.js → sudo /usr/local/bin/manage_hotspot_clients <action> <mac> <username>
+extension.js → pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients <action> <mac> <username>
 ```
 
 ### What the Extension JavaScript Actually Executes
@@ -142,15 +144,15 @@ extension.js → sudo /usr/local/bin/manage_hotspot_clients <action> <mac> <user
 |---|---|---|
 | Toggle hotspot ON | `systemctl start wifi-hotspot@<user>.service` | Polkit rule |
 | Toggle hotspot OFF | `systemctl stop wifi-hotspot@<user>.service` | Polkit rule |
-| List connected devices | `sudo /usr/local/bin/manage_hotspot_clients list "" <user>` | Sudoers rule |
-| Block a device | `sudo /usr/local/bin/manage_hotspot_clients block <mac> <user>` | Sudoers rule |
-| Unblock a device | `sudo /usr/local/bin/manage_hotspot_clients unblock <mac> <user>` | Sudoers rule |
+| List connected devices | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients list "" <user>` | Polkit Policy |
+| Block a device | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients block <mac> <user>` | Polkit Policy |
+| Unblock a device | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients unblock <mac> <user>` | Polkit Policy |
 | Check hotspot status | `systemctl is-active wifi-hotspot@<user>.service` | No privilege needed |
 
 ### Security Guarantees
 
-- **No arbitrary command execution**: The extension can only call `systemctl` (gated by Polkit) and one fixed script (gated by sudoers).
-- **No secrets in GSettings**: The WPA2 password is stored in `~/.config/wifi-hotspot.conf` with `chmod 600` (owner-only read/write), never in the dconf database.
+- **No arbitrary command execution**: The extension can only call `systemctl` (gated by Polkit rule) and one fixed script (gated by Polkit policy).
+- **No secrets in GSettings**: The Wi-Fi password is stored in `~/.config/wifi-hotspot.conf` with `chmod 600` (owner-only read/write), never in the dconf database.
 - **No network downloads**: The extension does not fetch any external resources at runtime.
 - **Full cleanup on disable**: The `disable()` method destroys all UI elements and removes all GLib timeout sources, leaving the shell in its original state.
 

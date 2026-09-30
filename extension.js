@@ -158,8 +158,8 @@ const HotspotRouterToggle = GObject.registerClass(
                 }
             }
 
-            if (rawMode.startsWith('5G') || rawMode === 'a') return '5GHz';
-            if (rawMode.startsWith('6G')) return '6GHz';
+            if (rawMode.includes('5G') || rawMode === 'a') return '5GHz';
+            if (rawMode.includes('6G')) return '6GHz';
             return '2.4GHz';
         }
 
@@ -198,7 +198,8 @@ const HotspotRouterToggle = GObject.registerClass(
                 }
             }
             
-            let qrString = `WIFI:S:${ssid};T:${usePassword ? 'WPA' : 'nopass'};P:${usePassword ? password : ''};;`;
+            const escapeQr = str => str.replace(/([\\;:,"\/])/g, '\\$1');
+            let qrString = `WIFI:S:${escapeQr(ssid)};T:${usePassword ? 'WPA' : 'nopass'};P:${usePassword ? escapeQr(password) : ''};;`;
             
             if (this._lastQrString === qrString) {
                 // Already generated — just ensure it's visible
@@ -262,7 +263,6 @@ const HotspotRouterToggle = GObject.registerClass(
                     argv: args,
                     flags: callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE
                 });
-                proc.init(null);
                 this._activeSubprocesses.push(proc);
                 if (callback) {
                     proc.communicate_utf8_async(null, null, (obj, res) => {
@@ -294,8 +294,9 @@ const HotspotRouterToggle = GObject.registerClass(
                     argv: ['systemctl', 'is-active', `wifi-hotspot@${username}.service`],
                     flags: Gio.SubprocessFlags.STDOUT_PIPE
                 });
-                proc.init(null);
+                this._activeSubprocesses.push(proc);
                 proc.communicate_utf8_async(null, null, (obj, res) => {
+                    this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
                     if (this._destroyed) return;
                     try {
                         let [success, stdout] = obj.communicate_utf8_finish(res);
@@ -306,11 +307,11 @@ const HotspotRouterToggle = GObject.registerClass(
                             this._refreshBandLabel();
                         }
                     } catch (err) {
-
+                        /* ignore */
                     }
                 });
             } catch (e) {
-
+                /* ignore */
             }
         }
 
@@ -338,7 +339,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         let bitrate = parts.length > 4 ? parts[4] : '';
                         let ip = parts.length > 5 ? parts[5] : '';
 
-                        let item = new PopupMenu.PopupMenuItem('');
+                        let item = new PopupMenu.PopupMenuItem('', { reactive: false });
                         let infoBox = new St.BoxLayout({ vertical: true, x_expand: true });
                         let nameLabel = new St.Label({ text: hostname, style: 'font-weight: 500;' });
                         infoBox.add_child(nameLabel);
@@ -403,7 +404,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         let mac = parts[0];
                         let hostname = parts.length > 1 ? parts[1] : mac;
 
-                        let item = new PopupMenu.PopupMenuItem(hostname);
+                        let item = new PopupMenu.PopupMenuItem(hostname, { reactive: false });
 
                         let unblockBtn = new St.Button({
                             style_class: 'button',
@@ -559,17 +560,18 @@ const HotspotRouterToggle = GObject.registerClass(
                 this._lastQrFile = null;
             }
             // Clean up any orphaned QR files
-            try {
-                let dir = Gio.File.new_for_path('/tmp');
-                let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-                let info;
-                while ((info = enumerator.next_file(null)) !== null) {
-                    let name = info.get_name();
-                    if (name.startsWith('wifi-hotspot-qr-') && name.endsWith('.png')) {
-                        try { Gio.File.new_for_path('/tmp/' + name).delete(null); } catch(e) {}
+                try {
+                    let dir = Gio.File.new_for_path('/tmp');
+                    let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                    let info;
+                    while ((info = enumerator.next_file(null)) !== null) {
+                        let name = info.get_name();
+                        if (name.startsWith('wifi-hotspot-qr-') && name.endsWith('.png')) {
+                            try { Gio.File.new_for_path('/tmp/' + name).delete(null); } catch(e) {}
+                        }
                     }
-                }
-            } catch(e) {}
+                    try { enumerator.close(null); } catch(e) {}
+                } catch(e) {}
             super.destroy();
         }
     });

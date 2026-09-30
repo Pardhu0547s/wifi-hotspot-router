@@ -95,6 +95,9 @@ EOF'''
 if patch3_target in content:
     content = content.replace(patch3_target, patch3_replacement, 1)
     print("[+] Patch 3 applied: WPA3-Personal pure SAE mode support")
+elif patch3_target.replace('connect. \n', 'connect.\n') in content:
+    content = content.replace(patch3_target.replace('connect. \n', 'connect.\n'), patch3_replacement, 1)
+    print("[+] Patch 3 applied: WPA3-Personal pure SAE mode support")
 else:
     print("[!] Patch 3 target not found or already applied")
 
