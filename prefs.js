@@ -90,11 +90,11 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             let band = bandRow.selected === 1 ? 'a' : 'bg';
 
             let ssidBytes = new TextEncoder().encode(ssid).length;
-            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !ssid.includes('"') && !ssid.includes('\n') && !ssid.includes('\r');
+            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !/[\\"$`\r\n]/.test(ssid);
             ssidWarning.visible = !ssidValid;
             if (!ssidValid) return false;
 
-            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !pass.includes('"');
+            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !/[\\"$`\r\n]/.test(pass);
             passWarning.visible = !passValid;
             if (!passValid) return false;
 
@@ -145,11 +145,11 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         const markChanged = () => {
             let ssid = ssidRow.get_text() || '';
             let ssidBytes = new TextEncoder().encode(ssid.trim()).length;
-            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !ssid.includes('"') && !ssid.includes('\n') && !ssid.includes('\r');
+            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !/[\\"$`\r\n]/.test(ssid);
             ssidWarning.visible = !ssidValid;
 
             let pass = passwordRow.get_text() || '';
-            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !pass.includes('"');
+            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !/[\\"$`\r\n]/.test(pass);
             passWarning.visible = !passValid;
 
             hasUnsavedChanges = true;
@@ -179,17 +179,16 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         supportRow.add_suffix(starButton);
         supportGroup.add(supportRow);
 
-        let passInitValid = /^[\x20-\x7E]{8,63}$/.test(config.password) && !config.password.includes('"');
+        let passInitValid = /^[\x20-\x7E]{8,63}$/.test(config.password) && !/[\\"$`\r\n]/.test(config.password);
         passWarning.visible = !passInitValid;
     }
 
     _generateRandomPassword() {
-        const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        let res = '';
-        for (let i = 0; i < 12; i++) {
-            res += chars.charAt(Math.floor(Math.random() * chars.length));
+        try {
+            return GLib.uuid_string_random().replace(/-/g, '').substring(0, 12);
+        } catch (e) {
+            return 'hotspot' + Math.floor(Math.random() * 8999 + 1000);
         }
-        return res;
     }
 
     _loadSavedConfig(settings = null) {
@@ -225,6 +224,8 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                     }
                 }
             } catch (e) { }
+        } else {
+            this._saveConfig(config.ssid, config.password, config.band);
         }
         return config;
     }
