@@ -15,15 +15,10 @@
       <summary>Ethernet / Standalone Hotspot Band</summary>
       <description>Frequency band when sharing a wired connection (2.4 GHz or 5 GHz)</description>
     </key>
-    <key name="block-ads" type="b">
-      <default>false</default>
-      <summary>Block Ads and Trackers</summary>
-      <description>Route DNS through AdGuard to filter advertisements and malicious domains on connected devices</description>
-    </key>
     <key name="inhibit-sleep" type="b">
       <default>true</default>
       <summary>Prevent System Sleep While Hotspot Is Active</summary>
-      <description>Inhibit laptop suspend when devices are connected</description>
+      <description>Inhibit laptop suspend when hotspot is active</description>
     </key>
   </schema>
 </schemalist>

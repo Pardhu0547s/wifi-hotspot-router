@@ -97,13 +97,45 @@ const HotspotRouterToggle = GObject.registerClass(
             this._qrSeparator.hide();
 
             // Client device sections
+            this._connectedVisible = false;
+            this._connectedCount = 0;
+            this._connectedToggleItem = new PopupMenu.PopupMenuItem('Show Connected Devices');
+            this._connectedToggleItem.connect('activate', () => {
+                this._connectedVisible = !this._connectedVisible;
+                this._updateConnectedToggleLabel();
+                if (this._connectedVisible) {
+                    this._connectedSection.actor.show();
+                    this._updateDeviceLists();
+                } else {
+                    this._connectedSection.actor.hide();
+                }
+            });
+            this._scrollContent.add_child(this._connectedToggleItem);
+            this._connectedToggleItem.hide();
+
             this._connectedSection = new PopupMenu.PopupMenuSection();
             this._scrollContent.add_child(this._connectedSection.actor);
+            this._connectedSection.actor.hide();
 
-            this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
+            this._blockedVisible = false;
+            this._blockedCount = 0;
+            this._blockedToggleItem = new PopupMenu.PopupMenuItem('Show Blocked Devices');
+            this._blockedToggleItem.connect('activate', () => {
+                this._blockedVisible = !this._blockedVisible;
+                this._updateBlockedToggleLabel();
+                if (this._blockedVisible) {
+                    this._blockedSection.actor.show();
+                    this._updateDeviceLists();
+                } else {
+                    this._blockedSection.actor.hide();
+                }
+            });
+            this._scrollContent.add_child(this._blockedToggleItem);
+            this._blockedToggleItem.hide();
 
             this._blockedSection = new PopupMenu.PopupMenuSection();
             this._scrollContent.add_child(this._blockedSection.actor);
+            this._blockedSection.actor.hide();
 
             this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -145,14 +177,34 @@ const HotspotRouterToggle = GObject.registerClass(
                     this._refreshBandLabel();
                     if (this.checked) {
                         this._qrToggleItem.show();
+                        this._connectedToggleItem.show();
+                        this._blockedToggleItem.show();
                         if (this._qrVisible) {
                             this._updateQRCode();
+                        }
+                        if (this._connectedVisible) {
+                            this._connectedSection.actor.show();
+                        } else {
+                            this._connectedSection.actor.hide();
+                        }
+                        if (this._blockedVisible) {
+                            this._blockedSection.actor.show();
+                        } else {
+                            this._blockedSection.actor.hide();
                         }
                         this._updateDeviceLists();
                     } else {
                         this._qrToggleItem.hide();
+                        this._connectedToggleItem.hide();
+                        this._blockedToggleItem.hide();
+                        this._connectedSection.actor.hide();
+                        this._blockedSection.actor.hide();
                         this._qrVisible = false;
+                        this._connectedVisible = false;
+                        this._blockedVisible = false;
                         this._qrToggleItem.label.text = 'Show Wi-Fi QR Code';
+                        this._updateConnectedToggleLabel();
+                        this._updateBlockedToggleLabel();
                         this._qrCodeContainer.hide();
                         this._qrSeparator.hide();
                         this._clearDeviceLists();
@@ -161,12 +213,26 @@ const HotspotRouterToggle = GObject.registerClass(
             });
         }
 
+        _updateConnectedToggleLabel() {
+            let countStr = this._connectedCount > 0 ? ` (${this._connectedCount})` : '';
+            this._connectedToggleItem.label.text = this._connectedVisible
+                ? `Hide Connected Devices${countStr}`
+                : `Show Connected Devices${countStr}`;
+        }
+
+        _updateBlockedToggleLabel() {
+            let countStr = this._blockedCount > 0 ? ` (${this._blockedCount})` : '';
+            this._blockedToggleItem.label.text = this._blockedVisible
+                ? `Hide Blocked Devices${countStr}`
+                : `Show Blocked Devices${countStr}`;
+        }
+
         _loadConfig() {
             let config = {
                 ssid: 'hotspot',
                 password: '',
                 band: 'bg',
-                blockAds: false,
+                inhibitSleep: true,
             };
 
             let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
@@ -183,8 +249,7 @@ const HotspotRouterToggle = GObject.registerClass(
                                     case 'SSID': config.ssid = val; break;
                                     case 'PASSWORD': config.password = val; break;
                                     case 'BAND': config.band = val; break;
-                                    case 'BLOCK_ADS': config.blockAds = (val === 'true'); break;
-                                    case 'DNS_PROFILE': if (val === 'adguard') config.blockAds = true; break;
+                                    case 'INHIBIT_SLEEP': config.inhibitSleep = (val === 'true'); break;
                                 }
                             }
                         }
@@ -307,14 +372,30 @@ const HotspotRouterToggle = GObject.registerClass(
                 if (this.menu.isOpen) {
                     if (this.checked) {
                         this._qrToggleItem.show();
+                        this._connectedToggleItem.show();
+                        this._blockedToggleItem.show();
                         if (this._qrVisible) {
                             this._updateQRCode();
+                        }
+                        if (this._connectedVisible) {
+                            this._connectedSection.actor.show();
+                        }
+                        if (this._blockedVisible) {
+                            this._blockedSection.actor.show();
                         }
                         this._updateDeviceLists();
                     } else {
                         this._qrToggleItem.hide();
+                        this._connectedToggleItem.hide();
+                        this._blockedToggleItem.hide();
+                        this._connectedSection.actor.hide();
+                        this._blockedSection.actor.hide();
                         this._qrVisible = false;
+                        this._connectedVisible = false;
+                        this._blockedVisible = false;
                         this._qrToggleItem.label.text = 'Show Wi-Fi QR Code';
+                        this._updateConnectedToggleLabel();
+                        this._updateBlockedToggleLabel();
                         this._qrCodeContainer.hide();
                         this._qrSeparator.hide();
                         this._clearDeviceLists();
@@ -538,41 +619,12 @@ const HotspotRouterToggle = GObject.registerClass(
 
         _clearDeviceLists() {
             this._lastStatusOutput = null;
+            this._connectedCount = 0;
+            this._blockedCount = 0;
             this._connectedSection.removeAll();
             this._blockedSection.removeAll();
-
-            let connHeader = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
-            connHeader.label.add_style_class_name('hotspot-section-header');
-            this._connectedSection.addMenuItem(connHeader);
-            this._connectedSection.addMenuItem(new PopupMenu.PopupMenuItem('Hotspot is turned off', { reactive: false }));
-
-            let blockHeader = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
-            blockHeader.label.add_style_class_name('hotspot-section-header');
-            this._blockedSection.addMenuItem(blockHeader);
-
-            let username = GLib.get_user_name();
-            let blockedCount = 0;
-            let denyPath = GLib.get_user_config_dir() + '/wifi-hotspot.deny';
-            if (GLib.file_test(denyPath, GLib.FileTest.EXISTS)) {
-                try {
-                    let [ok, content] = GLib.file_get_contents(denyPath);
-                    if (ok) {
-                        let lines = new TextDecoder('utf-8').decode(content).split('\n');
-                        for (let line of lines) {
-                            if (!line.trim()) continue;
-                            blockedCount++;
-                            let bfields = line.split('|');
-                            let bmac = bfields[0];
-                            let bhost = bfields.length > 1 ? bfields[1] : bmac;
-                            this._blockedSection.addMenuItem(this._createBlockedItem(bmac, bhost, username));
-                        }
-                    }
-                } catch (e) { }
-            }
-
-            if (blockedCount === 0) {
-                this._blockedSection.addMenuItem(new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false }));
-            }
+            this._updateConnectedToggleLabel();
+            this._updateBlockedToggleLabel();
         }
 
         _updateDeviceLists() {
@@ -597,14 +649,6 @@ const HotspotRouterToggle = GObject.registerClass(
                 this._connectedSection.removeAll();
                 this._blockedSection.removeAll();
 
-                let connHeader = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
-                connHeader.label.add_style_class_name('hotspot-section-header');
-                this._connectedSection.addMenuItem(connHeader);
-
-                let blockHeader = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
-                blockHeader.label.add_style_class_name('hotspot-section-header');
-                this._blockedSection.addMenuItem(blockHeader);
-
                 let activeCount = 0;
                 let blockedCount = 0;
 
@@ -620,37 +664,15 @@ const HotspotRouterToggle = GObject.registerClass(
                         let fields = line.split('|');
                         let mac = fields[0];
                         let hostname = fields.length > 1 ? fields[1] : mac;
-                        let rxBytes = fields.length > 2 ? parseInt(fields[2], 10) || 0 : 0;
-                        let txBytes = fields.length > 3 ? parseInt(fields[3], 10) || 0 : 0;
-                        let bitrate = fields.length > 4 ? fields[4] : '';
-                        let ip = fields.length > 5 ? fields[5] : '';
 
                         let item = new PopupMenu.PopupBaseMenuItem({ activate: false });
-                        let infoBox = new St.BoxLayout({ vertical: true, x_expand: true });
                         let nameLabel = new St.Label({
                             text: hostname,
+                            x_expand: true,
+                            y_align: Clutter.ActorAlign.CENTER,
                             style_class: 'hotspot-device-title',
                         });
-                        infoBox.add_child(nameLabel);
-
-                        let totalBytes = rxBytes + txBytes;
-                        let formatBytes = (b) => {
-                            if (!b || b <= 0) return '0 B';
-                            let units = ['B', 'KB', 'MB', 'GB', 'TB'];
-                            let i = Math.floor(Math.log(b) / Math.log(1024));
-                            return (b / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
-                        };
-                        let subText = '';
-                        if (ip && ip !== 'Unknown IP') subText += `${ip} • `;
-                        subText += `${formatBytes(totalBytes)} transferred`;
-                        if (bitrate) subText += ` • ${bitrate}`;
-
-                        let subLabel = new St.Label({
-                            text: subText,
-                            style_class: 'hotspot-device-subtitle',
-                        });
-                        infoBox.add_child(subLabel);
-                        item.add_child(infoBox);
+                        item.add_child(nameLabel);
 
                         let blockBtn = new St.Button({
                             style_class: 'button hotspot-action-btn',
@@ -691,6 +713,11 @@ const HotspotRouterToggle = GObject.registerClass(
                 if (blockedCount === 0) {
                     this._blockedSection.addMenuItem(new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false }));
                 }
+
+                this._connectedCount = activeCount;
+                this._blockedCount = blockedCount;
+                this._updateConnectedToggleLabel();
+                this._updateBlockedToggleLabel();
             });
         }
 

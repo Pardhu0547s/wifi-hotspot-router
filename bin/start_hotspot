@@ -29,7 +29,6 @@ SSID="hotspot"
 PASSWORD="hotspotpassword"
 MAX_CLIENTS="10"
 BAND="bg"
-BLOCK_ADS="false"
 INHIBIT_SLEEP="true"
 
 # Parse user configuration file safely without eval/source
@@ -51,12 +50,6 @@ if [ -f "$CONFIG_FILE" ]; then
                     a|5G|5GHz) BAND="a" ;;
                     *) BAND="bg" ;;
                 esac
-                ;;
-            BLOCK_ADS)
-                [ "$val" = "true" ] && BLOCK_ADS="true" || BLOCK_ADS="false"
-                ;;
-            DNS_PROFILE)
-                [ "$val" = "adguard" ] && BLOCK_ADS="true"
                 ;;
             INHIBIT_SLEEP)
                 [ "$val" = "true" ] && INHIBIT_SLEEP="true" || INHIBIT_SLEEP="false"
@@ -430,9 +423,6 @@ echo "$USER_NAME" > "$RUN_DIR/active-user" 2>/dev/null || true
 # Append DNS and encryption arguments
 append_security_and_dns_args() {
     local -n arr=$1
-    if [ "$BLOCK_ADS" = "true" ]; then
-        arr+=(--dhcp-dns "94.140.14.14,94.140.15.15")
-    fi
     arr+=(-w 2)
 }
 

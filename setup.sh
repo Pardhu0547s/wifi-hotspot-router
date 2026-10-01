@@ -158,7 +158,6 @@ if [ ! -f "$CONFIG_DEST" ]; then
 SSID="hotspot"
 PASSWORD="hotspotpassword"
 BAND="bg"
-BLOCK_ADS="false"
 INHIBIT_SLEEP="true"
 EOF_CONF
     chmod 600 "$CONFIG_DEST"
