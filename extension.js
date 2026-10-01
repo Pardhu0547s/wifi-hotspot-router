@@ -180,7 +180,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         this._connectedToggleItem.show();
                         this._blockedToggleItem.show();
                         if (this._qrVisible) {
-                            this._updateQRCode();
+                            this._updateQRCode(true);
                         }
                         if (this._connectedVisible) {
                             this._connectedSection.actor.show();
@@ -307,12 +307,13 @@ const HotspotRouterToggle = GObject.registerClass(
             this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${band})`, statusText);
         }
 
-        _updateQRCode() {
-            let conf = this._cachedConfig || this._loadConfig();
+        _updateQRCode(forceRefresh = false) {
+            this._cachedConfig = this._loadConfig();
+            let conf = this._cachedConfig;
             const escapeQr = str => (str || '').replace(/([\\;:,"\/])/g, '\\$1');
             let qrString = `WIFI:S:${escapeQr(conf.ssid)};T:WPA;P:${escapeQr(conf.password)};;`;
 
-            if (this._lastQrString === qrString && this._qrCodeContainer.visible) {
+            if (!forceRefresh && this._lastQrString === qrString && this._qrCodeContainer.visible) {
                 return;
             }
             this._lastQrString = qrString;
@@ -321,6 +322,9 @@ const HotspotRouterToggle = GObject.registerClass(
             this._qrIndex = (this._qrIndex + 1) % 2;
             let username = GLib.get_user_name();
             let qrFile = GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${this._qrIndex}.png`]);
+            try {
+                Gio.File.new_for_path(qrFile).delete(null);
+            } catch (e) { }
 
             try {
                 let proc = new Gio.Subprocess({
@@ -337,6 +341,7 @@ const HotspotRouterToggle = GObject.registerClass(
                         let ok = obj.get_successful();
                         if (ok && GLib.file_test(qrFile, GLib.FileTest.EXISTS)) {
                             let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
+                            this._qrCodeIcon.set_gicon(null);
                             this._qrCodeIcon.set_gicon(gicon);
                             if (this._qrVisible) {
                                 this._qrCodeContainer.show();
