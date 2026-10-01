@@ -2,8 +2,11 @@
 
 A GNOME Shell extension for simultaneous Wi-Fi hotspot sharing and client connectivity (AP + STA repeater mode) on a single Wi-Fi adapter.
 
-![Quick Settings](screenshot.png)
-![Preferences](screenshot-menu.png)
+<p align="center">
+  <img src="screenshot.png" alt="Quick Settings Menu" />
+  <br/><br/>
+  <img src="screenshot-menu.png" alt="Preferences Window" />
+</p>
 
 ## Features
 
