@@ -41,7 +41,7 @@ if [ -f "$CONFIG_FILE" ]; then
                 [ -n "$clean_ssid" ] && SSID="$clean_ssid"
                 ;;
             PASSWORD)
-                clean_pass=$(echo "$val" | tr -d '"`\\\r\n' | head -c 63)
+                clean_pass=$(echo "$val" | tr -d '"`\\\r\n$' | head -c 63)
                 [ -n "$clean_pass" ] && PASSWORD="$clean_pass"
                 ;;
             BAND)

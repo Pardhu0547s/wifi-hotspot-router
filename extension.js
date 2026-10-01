@@ -246,7 +246,7 @@ const HotspotRouterToggle = GObject.registerClass(
                                 let [, key, val] = match;
                                 switch (key) {
                                     case 'SSID': config.ssid = val; break;
-                                    case 'PASSWORD': config.password = val; break;
+                                    case 'PASSWORD': if (val) config.password = val; break;
                                     case 'BAND': config.band = val; break;
                                 }
                             }
@@ -254,6 +254,22 @@ const HotspotRouterToggle = GObject.registerClass(
                     }
                 } catch (e) { }
             }
+
+            if (!config.password) {
+                try {
+                    config.password = GLib.uuid_string_random().replace(/-/g, '').substring(0, 12);
+                } catch (e) {
+                    config.password = 'hotspot' + Math.floor(Math.random() * 8999 + 1000);
+                }
+                try {
+                    let configDir = GLib.get_user_config_dir();
+                    GLib.mkdir_with_parents(configDir, 448);
+                    let output = `SSID="${config.ssid}"\nPASSWORD="${config.password}"\nBAND="${config.band}"\n`;
+                    GLib.file_set_contents(path, output);
+                    GLib.chmod(path, 384);
+                } catch (e) { }
+            }
+
             return config;
         }
 
@@ -790,6 +806,10 @@ const HotspotRouterToggle = GObject.registerClass(
             if (this._handoverRestartTimeoutId > 0) {
                 GLib.source_remove(this._handoverRestartTimeoutId);
                 this._handoverRestartTimeoutId = 0;
+            }
+            if (this._handoverWatchdogId > 0) {
+                GLib.source_remove(this._handoverWatchdogId);
+                this._handoverWatchdogId = 0;
             }
             for (let { obj, id } of this._nmSignalIds) {
                 try {
