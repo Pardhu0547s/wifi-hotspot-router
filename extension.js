@@ -241,6 +241,8 @@ const HotspotRouterToggle = GObject.registerClass(
                     if (success) {
                         let lines = new TextDecoder('utf-8').decode(content).split('\n');
                         for (let line of lines) {
+                            line = line.replace(/\r/g, '').trim();
+                            if (!line) continue;
                             let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
                             if (match) {
                                 let [, key, val] = match;
@@ -319,11 +321,22 @@ const HotspotRouterToggle = GObject.registerClass(
             this._lastQrString = qrString;
 
             let runtimeDir = GLib.get_user_runtime_dir() || '/tmp';
-            this._qrIndex = (this._qrIndex + 1) % 2;
             let username = GLib.get_user_name();
-            let qrFile = GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${this._qrIndex}.png`]);
+            let timestamp = Date.now();
+            let qrFile = GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${timestamp}.png`]);
+
             try {
-                Gio.File.new_for_path(qrFile).delete(null);
+                let dir = Gio.File.new_for_path(runtimeDir);
+                let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                let info;
+                while ((info = enumerator.next_file(null)) !== null) {
+                    let name = info.get_name();
+                    if (name.startsWith(`wifi-hotspot-qr-${username}-`)) {
+                        try {
+                            dir.get_child(name).delete(null);
+                        } catch (e) { }
+                    }
+                }
             } catch (e) { }
 
             try {
