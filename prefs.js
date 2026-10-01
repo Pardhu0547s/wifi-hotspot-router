@@ -84,19 +84,19 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
         const triggerSave = () => {
             let rawSsid = ssidRow.get_text() || '';
-            let ssid = rawSsid.substring(0, 32).replace(/["`$\\]/g, '').trim();
-            if (!ssid) ssid = 'hotspot';
+            let ssid = rawSsid.trim();
 
             let pass = passwordRow.get_text() || '';
             let band = bandRow.selected === 1 ? 'a' : 'bg';
 
-            let passValid = pass.length >= 8 && pass.length <= 63;
-            passWarning.visible = !passValid;
-            if (!passValid) return false;
-
-            let ssidValid = (rawSsid.trim().length > 0 && rawSsid.length <= 32 && !rawSsid.includes('"'));
+            let ssidBytes = new TextEncoder().encode(ssid).length;
+            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !ssid.includes('"') && !ssid.includes('\n') && !ssid.includes('\r');
             ssidWarning.visible = !ssidValid;
             if (!ssidValid) return false;
+
+            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !pass.includes('"');
+            passWarning.visible = !passValid;
+            if (!passValid) return false;
 
             const saveSuccess = this._saveConfig(ssid, pass, band);
 
@@ -143,13 +143,14 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
 
         const markChanged = () => {
-            let pass = passwordRow.get_text() || '';
-            let passValid = pass.length >= 8 && pass.length <= 63;
-            passWarning.visible = !passValid;
-
             let ssid = ssidRow.get_text() || '';
-            let ssidValid = ssid.trim().length > 0 && ssid.length <= 32 && !ssid.includes('"');
+            let ssidBytes = new TextEncoder().encode(ssid.trim()).length;
+            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !ssid.includes('"') && !ssid.includes('\n') && !ssid.includes('\r');
             ssidWarning.visible = !ssidValid;
+
+            let pass = passwordRow.get_text() || '';
+            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !pass.includes('"');
+            passWarning.visible = !passValid;
 
             hasUnsavedChanges = true;
             actionGroup.visible = true;
@@ -178,27 +179,23 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         supportRow.add_suffix(starButton);
         supportGroup.add(supportRow);
 
-        window.connect('close-request', () => {
-            if (hasUnsavedChanges) {
-                let pass = passwordRow.get_text() || '';
-                let ssid = ssidRow.get_text() || '';
-                let passValid = (pass.length >= 8 && pass.length <= 63);
-                let ssidValid = (ssid.trim().length > 0 && ssid.length <= 32 && !ssid.includes('"'));
-                if (passValid && ssidValid) {
-                    triggerSave();
-                }
-            }
-            return false;
-        });
-
-        let passInitValid = config.password.length >= 8;
+        let passInitValid = /^[\x20-\x7E]{8,63}$/.test(config.password) && !config.password.includes('"');
         passWarning.visible = !passInitValid;
+    }
+
+    _generateRandomPassword() {
+        const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let res = '';
+        for (let i = 0; i < 12; i++) {
+            res += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return res;
     }
 
     _loadSavedConfig(settings = null) {
         let config = {
             ssid: 'hotspot',
-            password: 'hotspotpassword',
+            password: this._generateRandomPassword(),
             band: 'bg',
         };
 
@@ -221,7 +218,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                             let [, key, val] = match;
                             switch (key) {
                                 case 'SSID': config.ssid = val; break;
-                                case 'PASSWORD': config.password = val; break;
+                                case 'PASSWORD': if (val) config.password = val; break;
                                 case 'BAND': config.band = val; break;
                             }
                         }

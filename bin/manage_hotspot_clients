@@ -11,7 +11,7 @@ USER_NAME="$3"
 CALLER_UID="${PKEXEC_UID:-${SUDO_UID:-$(id -u)}}"
 CALLER_USER=$(getent passwd "$CALLER_UID" 2>/dev/null | cut -d: -f1)
 
-if [ -z "$USER_NAME" ]; then
+if [ "$CALLER_UID" -ne 0 ]; then
     USER_NAME="$CALLER_USER"
 fi
 
@@ -22,12 +22,6 @@ fi
 
 if ! [[ "$USER_NAME" =~ ^[a-zA-Z0-9_.][a-zA-Z0-9_.-]*\$?$ ]]; then
     echo "Error: Invalid username format: $USER_NAME" >&2
-    exit 1
-fi
-
-# Ensure unprivileged users can only manage their own hotspot
-if [ "$CALLER_UID" -ne 0 ] && [ "$CALLER_USER" != "$USER_NAME" ]; then
-    echo "Error: Authorization denied. $CALLER_USER cannot manage resources for $USER_NAME." >&2
     exit 1
 fi
 

@@ -306,21 +306,42 @@ const HotspotRouterToggle = GObject.registerClass(
             let username = GLib.get_user_name();
             let qrFile = GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${this._qrIndex}.png`]);
 
-            this._runCommand(['qrencode', '-t', 'PNG', '-s', '5', '-o', qrFile, qrString], (success) => {
-                if (this._destroyed) return;
-                if (success && GLib.file_test(qrFile, GLib.FileTest.EXISTS)) {
-                    let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
-                    this._qrCodeIcon.set_gicon(gicon);
-                    if (this._qrVisible) {
-                        this._qrCodeContainer.show();
-                        this._qrSeparator.show();
+            try {
+                let proc = new Gio.Subprocess({
+                    argv: ['qrencode', '-t', 'PNG', '-s', '5', '-o', qrFile],
+                    flags: Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE,
+                });
+                proc.init(null);
+                this._activeSubprocesses.push(proc);
+                proc.communicate_utf8_async(qrString, null, (obj, res) => {
+                    this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
+                    if (this._destroyed) return;
+                    try {
+                        obj.communicate_utf8_finish(res);
+                        let ok = obj.get_successful();
+                        if (ok && GLib.file_test(qrFile, GLib.FileTest.EXISTS)) {
+                            let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
+                            this._qrCodeIcon.set_gicon(gicon);
+                            if (this._qrVisible) {
+                                this._qrCodeContainer.show();
+                                this._qrSeparator.show();
+                            }
+                        } else {
+                            this._lastQrString = null;
+                            this._qrCodeContainer.hide();
+                            this._qrSeparator.hide();
+                        }
+                    } catch (err) {
+                        this._lastQrString = null;
+                        this._qrCodeContainer.hide();
+                        this._qrSeparator.hide();
                     }
-                } else {
-                    this._lastQrString = null;
-                    this._qrCodeContainer.hide();
-                    this._qrSeparator.hide();
-                }
-            });
+                });
+            } catch (e) {
+                this._lastQrString = null;
+                this._qrCodeContainer.hide();
+                this._qrSeparator.hide();
+            }
         }
 
         async _openExtensionPreferences() {
@@ -333,6 +354,15 @@ const HotspotRouterToggle = GObject.registerClass(
 
         _handleToggleEvent(shouldActivate) {
             this._isTransitioning = true;
+            this._isHandover = false;
+            if (this._handoverRestartTimeoutId > 0) {
+                GLib.source_remove(this._handoverRestartTimeoutId);
+                this._handoverRestartTimeoutId = 0;
+            }
+            if (this._handoverWatchdogId > 0) {
+                GLib.source_remove(this._handoverWatchdogId);
+                this._handoverWatchdogId = 0;
+            }
             this.subtitle = shouldActivate ? 'Starting...' : 'Stopping...';
             this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, shouldActivate ? 'Starting hotspot...' : 'Stopping hotspot...');
 
@@ -529,6 +559,19 @@ const HotspotRouterToggle = GObject.registerClass(
             if (newState === NM.DeviceState.PREPARE || newState === NM.DeviceState.CONFIG || newState === NM.DeviceState.NEED_AUTH) {
                 if (this.checked && !this._isTransitioning && !this._isHandover) {
                     this._isHandover = true;
+                    if (this._handoverWatchdogId > 0) {
+                        GLib.source_remove(this._handoverWatchdogId);
+                    }
+                    this._handoverWatchdogId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 20, () => {
+                        this._handoverWatchdogId = 0;
+                        if (this._isHandover) {
+                            this._isHandover = false;
+                            this._checkHotspotActiveState();
+                            this._refreshBandLabel();
+                        }
+                        return GLib.SOURCE_REMOVE;
+                    });
+
                     this.subtitle = 'Switching Wi-Fi...';
                     this.menu.setHeader(
                         'network-wireless-hotspot-symbolic',
@@ -540,6 +583,10 @@ const HotspotRouterToggle = GObject.registerClass(
                 }
             } else if (newState === NM.DeviceState.ACTIVATED) {
                 if (this._isHandover) {
+                    if (this._handoverWatchdogId > 0) {
+                        GLib.source_remove(this._handoverWatchdogId);
+                        this._handoverWatchdogId = 0;
+                    }
                     if (this._handoverRestartTimeoutId > 0) {
                         GLib.source_remove(this._handoverRestartTimeoutId);
                         this._handoverRestartTimeoutId = 0;
@@ -564,6 +611,10 @@ const HotspotRouterToggle = GObject.registerClass(
                 }
             } else if (newState === NM.DeviceState.FAILED || (newState === NM.DeviceState.DISCONNECTED && oldState === NM.DeviceState.CONFIG)) {
                 if (this._isHandover) {
+                    if (this._handoverWatchdogId > 0) {
+                        GLib.source_remove(this._handoverWatchdogId);
+                        this._handoverWatchdogId = 0;
+                    }
                     if (this._handoverRestartTimeoutId > 0) {
                         GLib.source_remove(this._handoverRestartTimeoutId);
                         this._handoverRestartTimeoutId = 0;
@@ -810,7 +861,8 @@ export default class HotspotRouterExtension extends Extension {
         quickSettings.addExternalIndicator(this._indicator);
 
         if (!this._repositionToggle(quickSettings)) {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._idleId = 0;
                 if (this._indicator) {
                     this._repositionToggle(quickSettings);
                 }
@@ -868,6 +920,10 @@ export default class HotspotRouterExtension extends Extension {
     }
 
     disable() {
+        if (this._idleId > 0) {
+            GLib.Source.remove(this._idleId);
+            this._idleId = 0;
+        }
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;

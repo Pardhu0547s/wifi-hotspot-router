@@ -31,7 +31,7 @@ gnome-extensions enable wifi-hotspot-router@pardhu0547s.github.com
 
 ## Requirements
 
-- GNOME Shell 42+
+- GNOME Shell 45+
 - `create_ap` (`linux-wifi-hotspot`)
 - `hostapd`, `dnsmasq`, `iw`, `iptables`, `iproute2`, `qrencode`, `polkit`
 
