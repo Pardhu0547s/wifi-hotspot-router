@@ -7,18 +7,25 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import NM from 'gi://NM';
 
 const HotspotRouterToggle = GObject.registerClass(
     class HotspotRouterToggle extends QuickSettings.QuickMenuToggle {
         _init(extension) {
             this._extension = extension;
             this._timeoutId = 0;
-            this._clientCount = 0;
-            this._idleSeconds = 0;
-            this._inhibitCookie = 0;
-            this._inhibitPending = false;
             this._destroyed = false;
             this._activeSubprocesses = [];
+            this._qrIndex = 0;
+            this._lastQrString = null;
+            this._lastStatusOutput = null;
+            this._cachedConfig = null;
+            this._isTransitioning = false;
+            this._isHandover = false;
+            this._handoverRestartTimeoutId = 0;
+            this._nmClient = null;
+            this._nmSignalIds = [];
+            this._deviceSignalIds = [];
 
             super._init({
                 title: 'Hotspot',
@@ -26,20 +33,21 @@ const HotspotRouterToggle = GObject.registerClass(
                 toggleMode: true,
             });
 
-            // Read band AFTER super._init() so this.checked is available
+            this._cachedConfig = this._loadConfig();
             this._bandLabel = this._readBand();
-            this.title = 'Hotspot';
             this.subtitle = this.checked ? this._bandLabel : 'Off';
+            let initialStatus = this.checked ? 'Active • Manage connected clients' : 'Inactive • Manage connected clients';
+            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, initialStatus);
 
-            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, 'Manage connected clients');
-
-            // Create a wrapper item for the scroll view
-            this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-            this._scrollViewItem.set_style('padding: 0; margin: 0;');
+            this._scrollViewItem = new PopupMenu.PopupBaseMenuItem({
+                reactive: false,
+                can_focus: false,
+                style_class: 'hotspot-scrollview',
+            });
             this._scrollViewItem.y_expand = true;
-            
+
             this._scrollView = new St.ScrollView({
-                style_class: 'vfade',
+                style_class: 'vfade hotspot-scrollview',
                 hscrollbar_policy: St.PolicyType.NEVER,
                 vscrollbar_policy: St.PolicyType.AUTOMATIC,
                 x_expand: true,
@@ -49,19 +57,31 @@ const HotspotRouterToggle = GObject.registerClass(
             this._scrollContent = new St.BoxLayout({
                 vertical: true,
                 x_expand: true,
-                y_expand: true
+                y_expand: true,
             });
 
-            // Set a fixed max-height on the scroll view to prevent menu overflow
-            // Do NOT use notify::height — it causes relayout loops and jitter
-            this._scrollView.set_style('max-height: 400px;');
+            // Collapsible QR Code Toggle Item
+            this._qrVisible = false;
+            this._qrToggleItem = new PopupMenu.PopupMenuItem('Show Wi-Fi QR Code');
+            this._qrToggleItem.connect('activate', () => {
+                this._qrVisible = !this._qrVisible;
+                this._qrToggleItem.label.text = this._qrVisible ? 'Hide Wi-Fi QR Code' : 'Show Wi-Fi QR Code';
+                if (this._qrVisible) {
+                    this._updateQRCode();
+                } else {
+                    this._qrCodeContainer.hide();
+                    this._qrSeparator.hide();
+                }
+            });
+            this._scrollContent.add_child(this._qrToggleItem);
+            this._qrToggleItem.hide();
 
-            // QR Code display container (inside the scroll view)
+            // QR Code view
             this._qrCodeContainer = new St.Bin({
                 x_expand: true,
                 x_align: Clutter.ActorAlign.CENTER,
                 y_expand: false,
-                style: 'padding: 12px 0;',
+                style_class: 'hotspot-qr-container',
             });
             this._qrCodeIcon = new St.Icon({
                 icon_size: 180,
@@ -72,26 +92,21 @@ const HotspotRouterToggle = GObject.registerClass(
             this._scrollContent.add_child(this._qrCodeContainer);
             this._qrCodeContainer.hide();
 
-            let qrSeparator = new PopupMenu.PopupSeparatorMenuItem();
-            this._scrollContent.add_child(qrSeparator);
-            
-            // Store reference to hide/show separator with QR code — hide initially
-            this._qrSeparator = qrSeparator;
+            this._qrSeparator = new PopupMenu.PopupSeparatorMenuItem();
+            this._scrollContent.add_child(this._qrSeparator);
             this._qrSeparator.hide();
 
-            // Connected clients section
+            // Client device sections
             this._connectedSection = new PopupMenu.PopupMenuSection();
             this._scrollContent.add_child(this._connectedSection.actor);
 
             this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
 
-            // Blocked clients section
             this._blockedSection = new PopupMenu.PopupMenuSection();
             this._scrollContent.add_child(this._blockedSection.actor);
 
             this._scrollContent.add_child(new PopupMenu.PopupSeparatorMenuItem());
 
-            // Extension Settings (inside scroll so it's always reachable)
             let settingsItem = new PopupMenu.PopupMenuItem('Extension Settings');
             settingsItem.connect('activate', () => {
                 this.menu.close();
@@ -101,135 +116,146 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this._scrollView.set_child(this._scrollContent);
             this._scrollViewItem.add_child(this._scrollView);
-
             this.menu.addMenuItem(this._scrollViewItem);
-
 
             this.connect('clicked', () => {
                 this._handleToggleEvent(this.checked);
             });
 
+            this._settings = null;
+            this._settingsChangedId = 0;
+            try {
+                this._settings = this._extension.getSettings();
+                this._settingsChangedId = this._settings.connect('changed', () => {
+                    this._cachedConfig = this._loadConfig();
+                    this._refreshBandLabel();
+                    if (this.menu.isOpen && this.checked && this._qrVisible) {
+                        this._updateQRCode();
+                    }
+                });
+            } catch (e) { }
+
             this._checkHotspotActiveState();
             this._startPollingLoop();
+            this._initNMClient();
 
             this._openStateId = this.menu.connect('open-state-changed', (menu, isOpen) => {
                 if (isOpen) {
+                    this._cachedConfig = this._loadConfig();
                     this._refreshBandLabel();
                     if (this.checked) {
-                        this._updateQRCode();
+                        this._qrToggleItem.show();
+                        if (this._qrVisible) {
+                            this._updateQRCode();
+                        }
+                        this._updateDeviceLists();
                     } else {
+                        this._qrToggleItem.hide();
+                        this._qrVisible = false;
+                        this._qrToggleItem.label.text = 'Show Wi-Fi QR Code';
                         this._qrCodeContainer.hide();
-                        if (this._qrSeparator) this._qrSeparator.hide();
+                        this._qrSeparator.hide();
+                        this._clearDeviceLists();
                     }
-                    this._updateDeviceLists();
                 }
             });
         }
 
+        _loadConfig() {
+            let config = {
+                ssid: 'hotspot',
+                password: '',
+                band: 'bg',
+                blockAds: false,
+            };
+
+            let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
+            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
+                try {
+                    let [success, content] = GLib.file_get_contents(path);
+                    if (success) {
+                        let lines = new TextDecoder('utf-8').decode(content).split('\n');
+                        for (let line of lines) {
+                            let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
+                            if (match) {
+                                let [, key, val] = match;
+                                switch (key) {
+                                    case 'SSID': config.ssid = val; break;
+                                    case 'PASSWORD': config.password = val; break;
+                                    case 'BAND': config.band = val; break;
+                                    case 'BLOCK_ADS': config.blockAds = (val === 'true'); break;
+                                    case 'DNS_PROFILE': if (val === 'adguard') config.blockAds = true; break;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) { }
+            }
+            return config;
+        }
+
         _readBand() {
             let rawMode = '';
-            let activeModeFile = '/tmp/wifi-hotspot-active-mode';
+            let activeModeFile = '/run/wifi-hotspot/active-mode';
             if (this.checked && GLib.file_test(activeModeFile, GLib.FileTest.EXISTS)) {
                 try {
                     let [success, content] = GLib.file_get_contents(activeModeFile);
                     if (success) {
-                        let decoder = new TextDecoder('utf-8');
-                        rawMode = decoder.decode(content).trim();
+                        rawMode = new TextDecoder('utf-8').decode(content).trim();
                     }
-                } catch (e) { /* ignore */ }
+                } catch (e) { }
             }
 
             if (!rawMode) {
-                let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
-                if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
-                    try {
-                        let [success, content] = GLib.file_get_contents(path);
-                        if (success) {
-                            let decoder = new TextDecoder('utf-8');
-                            let lines = decoder.decode(content).split('\n');
-                            for (let line of lines) {
-                                let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
-                                if (match && match[1] === 'BAND') {
-                                    rawMode = match[2];
-                                }
-                            }
-                        }
-                    } catch (e) { /* ignore */ }
-                }
+                let conf = this._cachedConfig || this._loadConfig();
+                rawMode = conf.band;
             }
 
-            if (rawMode.includes('5G') || rawMode === 'a') return '5GHz';
-            if (rawMode.includes('6G')) return '6GHz';
+            if (rawMode.startsWith('5G') || rawMode === 'a') return '5GHz';
+            if (rawMode.startsWith('6G')) return '6GHz';
             return '2.4GHz';
         }
 
         _refreshBandLabel() {
             let band = this._readBand();
             this._bandLabel = band;
-            this.title = 'Hotspot';
-            this.subtitle = this.checked ? band : 'Off';
-            let statusText = this.checked ? 'Active • Manage connected clients' : 'Inactive • Manage connected clients';
+            if (!this._isTransitioning) {
+                this.subtitle = this.checked ? band : 'Off';
+            }
+            let statusText = this._isTransitioning
+                ? (this.subtitle || 'Transitioning...')
+                : (this.checked ? 'Active • Manage connected clients' : 'Inactive • Manage connected clients');
             this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${band})`, statusText);
         }
 
         _updateQRCode() {
-            let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
-            let ssid = 'hotspot';
-            let usePassword = true;
-            let password = '';
-            
-            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
-                try {
-                    let [success, content] = GLib.file_get_contents(path);
-                    if (success) {
-                        let decoder = new TextDecoder('utf-8');
-                        let lines = decoder.decode(content).split('\n');
-                        for (let line of lines) {
-                            let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
-                            if (match) {
-                                let [_, key, value] = match;
-                                if (key === 'SSID') ssid = value;
-                                else if (key === 'USE_PASSWORD') usePassword = (value === 'true');
-                                else if (key === 'PASSWORD') password = value;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error(`[HotspotRouter] Failed to read config for QR code: ${e.message}`);
-                }
-            }
-            
-            const escapeQr = str => str.replace(/([\\;:,"\/])/g, '\\$1');
-            let qrString = `WIFI:S:${escapeQr(ssid)};T:${usePassword ? 'WPA' : 'nopass'};P:${usePassword ? escapeQr(password) : ''};;`;
-            
-            if (this._lastQrString === qrString) {
-                // Already generated — just ensure it's visible
-                this._qrCodeContainer.show();
-                if (this._qrSeparator) this._qrSeparator.show();
+            let conf = this._cachedConfig || this._loadConfig();
+            const escapeQr = str => (str || '').replace(/([\\;:,"\/])/g, '\\$1');
+            let qrString = `WIFI:S:${escapeQr(conf.ssid)};T:WPA;P:${escapeQr(conf.password)};;`;
+
+            if (this._lastQrString === qrString && this._qrCodeContainer.visible) {
                 return;
             }
             this._lastQrString = qrString;
-            
-            // Use a unique filename to bypass St.Icon texture caching when the password changes
-            let qrFile = `/tmp/wifi-hotspot-qr-${Date.now()}.png`;
-            
-            // Clean up previous QR code file
-            if (this._lastQrFile) {
-                try { Gio.File.new_for_path(this._lastQrFile).delete(null); } catch(e) {}
-            }
-            this._lastQrFile = qrFile;
-            
+
+            let runtimeDir = GLib.get_user_runtime_dir() || '/tmp';
+            this._qrIndex = (this._qrIndex + 1) % 2;
+            let username = GLib.get_user_name();
+            let qrFile = GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${this._qrIndex}.png`]);
+
             this._runCommand(['qrencode', '-t', 'PNG', '-s', '5', '-o', qrFile, qrString], (success) => {
+                if (this._destroyed) return;
                 if (success && GLib.file_test(qrFile, GLib.FileTest.EXISTS)) {
                     let gicon = Gio.FileIcon.new(Gio.File.new_for_path(qrFile));
                     this._qrCodeIcon.set_gicon(gicon);
-                    this._qrCodeContainer.show();
-                    if (this._qrSeparator) this._qrSeparator.show();
+                    if (this._qrVisible) {
+                        this._qrCodeContainer.show();
+                        this._qrSeparator.show();
+                    }
                 } else {
-                    // Reset so it retries next time (e.g. after user installs qrencode)
                     this._lastQrString = null;
                     this._qrCodeContainer.hide();
-                    if (this._qrSeparator) this._qrSeparator.hide();
+                    this._qrSeparator.hide();
                 }
             });
         }
@@ -238,40 +264,81 @@ const HotspotRouterToggle = GObject.registerClass(
             try {
                 await this._extension.openPreferences();
             } catch (err) {
-                let msg = err ? (err.message || String(err)) : '';
-                console.warn(`[HotspotRouter] Note on opening preferences: ${msg}`);
+                console.warn(`[HotspotRouter] Note opening preferences: ${err?.message || err}`);
             }
         }
 
         _handleToggleEvent(shouldActivate) {
+            this._isTransitioning = true;
+            this.subtitle = shouldActivate ? 'Starting...' : 'Stopping...';
+            this.menu.setHeader('network-wireless-hotspot-symbolic', `Hotspot (${this._bandLabel})`, shouldActivate ? 'Starting hotspot...' : 'Stopping hotspot...');
+
+            if (shouldActivate) {
+                try {
+                    let errFile = Gio.File.new_for_path('/run/wifi-hotspot/last-error');
+                    errFile.delete(null);
+                } catch (e) { }
+            }
+
             let username = GLib.get_user_name();
             let serviceName = `wifi-hotspot@${username}.service`;
             let args = shouldActivate
                 ? ['systemctl', 'start', serviceName]
                 : ['systemctl', 'stop', serviceName];
 
-            this.checked = shouldActivate;
-            this._refreshBandLabel();
-
             this._runCommand(args, () => {
+                this._isTransitioning = false;
                 this._checkHotspotActiveState();
+                this._refreshBandLabel();
+                if (shouldActivate && !this.checked) {
+                    let errPath = '/run/wifi-hotspot/last-error';
+                    if (GLib.file_test(errPath, GLib.FileTest.EXISTS)) {
+                        try {
+                            let [ok, content] = GLib.file_get_contents(errPath);
+                            if (ok) {
+                                let msg = new TextDecoder('utf-8').decode(content).trim();
+                                if (msg) {
+                                    Main.notify('Wi-Fi Hotspot Router', msg);
+                                }
+                            }
+                        } catch (e) { }
+                    }
+                }
                 if (this.menu.isOpen) {
-                    this._updateDeviceLists(true);
+                    if (this.checked) {
+                        this._qrToggleItem.show();
+                        if (this._qrVisible) {
+                            this._updateQRCode();
+                        }
+                        this._updateDeviceLists();
+                    } else {
+                        this._qrToggleItem.hide();
+                        this._qrVisible = false;
+                        this._qrToggleItem.label.text = 'Show Wi-Fi QR Code';
+                        this._qrCodeContainer.hide();
+                        this._qrSeparator.hide();
+                        this._clearDeviceLists();
+                    }
                 }
             });
         }
 
         _runCommand(args, callback = null) {
             try {
-                let proc = Gio.Subprocess.new(args, callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE);
+                let proc = new Gio.Subprocess({
+                    argv: args,
+                    flags: callback ? Gio.SubprocessFlags.STDOUT_PIPE : Gio.SubprocessFlags.NONE,
+                });
+                proc.init(null);
                 this._activeSubprocesses.push(proc);
                 if (callback) {
                     proc.communicate_utf8_async(null, null, (obj, res) => {
                         this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
                         if (this._destroyed) return;
                         try {
-                            let [success, stdout, stderr] = obj.communicate_utf8_finish(res);
-                            callback(true, stdout);
+                            let [, stdout] = obj.communicate_utf8_finish(res);
+                            let ok = obj.get_successful();
+                            callback(ok, stdout);
                         } catch (err) {
                             callback(false, null);
                         }
@@ -279,63 +346,291 @@ const HotspotRouterToggle = GObject.registerClass(
                 } else {
                     proc.wait_async(null, (obj, res) => {
                         this._activeSubprocesses = this._activeSubprocesses.filter(p => p !== obj);
-                        try { obj.wait_finish(res); } catch(e) {}
+                        try { obj.wait_finish(res); } catch (e) { }
                     });
                 }
             } catch (e) {
-                console.error(`[HotspotRouter] Failed executing command: ${e.message}`);
                 if (callback) callback(false, null);
             }
         }
 
         _checkHotspotActiveState() {
-            let username = GLib.get_user_name();
-            this._runCommand(['systemctl', 'is-active', `wifi-hotspot@${username}.service`], (success, stdout) => {
-                let state = stdout ? stdout.trim() : '';
-                let active = (state === 'active' || state === 'activating' || state === 'reloading');
-                if (this.checked !== active) {
-                    this.checked = active;
-                }
-                this._refreshBandLabel();
-            });
+            try {
+                let username = GLib.get_user_name();
+                let unitName = `wifi-hotspot@${username}.service`;
+
+                Gio.DBus.system.call(
+                    'org.freedesktop.systemd1',
+                    '/org/freedesktop/systemd1',
+                    'org.freedesktop.systemd1.Manager',
+                    'ListUnitsByNames',
+                    new GLib.Variant('(as)', [[unitName]]),
+                    new GLib.VariantType('(a(ssssssouso))'),
+                    Gio.DBusCallFlags.NONE,
+                    -1,
+                    null,
+                    (conn, res) => {
+                        if (this._destroyed) return;
+                        try {
+                            let reply = conn.call_finish(res);
+                            let [units] = reply.deepUnpack();
+                            let active = false;
+                            if (units && units.length > 0) {
+                                let state = units[0][3];
+                                active = (state === 'active' || state === 'activating');
+                            }
+                            if (this.checked !== active) {
+                                this.checked = active;
+                                if (!this._isTransitioning) {
+                                    this._refreshBandLabel();
+                                }
+                            }
+                        } catch (e) {
+                            if (this.checked) {
+                                this.checked = false;
+                                this._refreshBandLabel();
+                            }
+                        }
+                    }
+                );
+            } catch (e) { }
         }
 
-        _updateDeviceLists(updateUi = true) {
+        _initNMClient() {
+            try {
+                NM.Client.new_async(null, (obj, res) => {
+                    if (this._destroyed) return;
+                    try {
+                        this._nmClient = NM.Client.new_finish(res);
+                        this._setupDeviceWatchers();
+
+                        let addedId = this._nmClient.connect('device-added', () => this._setupDeviceWatchers());
+                        let removedId = this._nmClient.connect('device-removed', () => this._setupDeviceWatchers());
+                        this._nmSignalIds.push({ obj: this._nmClient, id: addedId });
+                        this._nmSignalIds.push({ obj: this._nmClient, id: removedId });
+                    } catch (err) { }
+                });
+            } catch (err) { }
+        }
+
+        _setupDeviceWatchers() {
+            if (this._destroyed || !this._nmClient) return;
+
+            for (let { dev, id } of this._deviceSignalIds) {
+                try {
+                    if (GObject.signal_handler_is_connected(dev, id)) {
+                        dev.disconnect(id);
+                    }
+                } catch (e) { }
+            }
+            this._deviceSignalIds = [];
+
+            let devices = this._nmClient.get_devices() || [];
+            for (let dev of devices) {
+                let type = dev.get_device_type();
+                if (type === NM.DeviceType.WIFI) {
+                    let iface = dev.get_iface();
+                    if (iface && (iface === 'ap0' || iface === 'ap1' || iface.endsWith('_ap'))) {
+                        continue;
+                    }
+
+                    let sigId = dev.connect('state-changed', (d, newState, oldState, reason) => {
+                        this._onDeviceStateChanged(d, newState, oldState, reason);
+                    });
+                    this._deviceSignalIds.push({ dev, id: sigId });
+                }
+            }
+        }
+
+        _onDeviceStateChanged(dev, newState, oldState, reason) {
+            let username = GLib.get_user_name();
+            let serviceName = `wifi-hotspot@${username}.service`;
+
+            // When user initiates Wi-Fi association to another network
+            if (newState === NM.DeviceState.PREPARE || newState === NM.DeviceState.CONFIG || newState === NM.DeviceState.NEED_AUTH) {
+                if (this.checked && !this._isTransitioning && !this._isHandover) {
+                    this._isHandover = true;
+                    this.subtitle = 'Switching Wi-Fi...';
+                    this.menu.setHeader(
+                        'network-wireless-hotspot-symbolic',
+                        `Hotspot (${this._bandLabel})`,
+                        'Switching Wi-Fi network...'
+                    );
+
+                    this._runCommand(['systemctl', 'stop', serviceName]);
+                }
+            } else if (newState === NM.DeviceState.ACTIVATED) {
+                if (this._isHandover) {
+                    if (this._handoverRestartTimeoutId > 0) {
+                        GLib.source_remove(this._handoverRestartTimeoutId);
+                        this._handoverRestartTimeoutId = 0;
+                    }
+
+                    this.subtitle = 'Resuming hotspot...';
+                    this._handoverRestartTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 800, () => {
+                        this._handoverRestartTimeoutId = 0;
+                        if (this._destroyed || !this._isHandover) return GLib.SOURCE_REMOVE;
+
+                        this._runCommand(['systemctl', 'start', serviceName], () => {
+                            this._isHandover = false;
+                            this._checkHotspotActiveState();
+                            this._refreshBandLabel();
+                            if (this.menu.isOpen && this.checked) {
+                                this._updateQRCode();
+                                this._updateDeviceLists();
+                            }
+                        });
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            } else if (newState === NM.DeviceState.FAILED || (newState === NM.DeviceState.DISCONNECTED && oldState === NM.DeviceState.CONFIG)) {
+                if (this._isHandover) {
+                    if (this._handoverRestartTimeoutId > 0) {
+                        GLib.source_remove(this._handoverRestartTimeoutId);
+                        this._handoverRestartTimeoutId = 0;
+                    }
+
+                    this.subtitle = 'Recovering hotspot...';
+                    this._handoverRestartTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, () => {
+                        this._handoverRestartTimeoutId = 0;
+                        if (this._destroyed || !this._isHandover) return GLib.SOURCE_REMOVE;
+
+                        this._runCommand(['systemctl', 'start', serviceName], () => {
+                            this._isHandover = false;
+                            this._checkHotspotActiveState();
+                            this._refreshBandLabel();
+                        });
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            }
+        }
+
+        _createBlockedItem(bmac, bhost, username) {
+            let item = new PopupMenu.PopupBaseMenuItem({ activate: false });
+            let nameLabel = new St.Label({
+                text: bhost,
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+                style_class: 'hotspot-device-title',
+            });
+            item.add_child(nameLabel);
+
+            let unblockBtn = new St.Button({
+                style_class: 'button hotspot-action-btn',
+                child: new St.Label({
+                    text: 'Unblock',
+                    style_class: 'hotspot-action-btn-label',
+                }),
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+
+            unblockBtn.connect('clicked', () => {
+                this._lastStatusOutput = null;
+                this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'unblock', bmac, username], () => {
+                    this._updateDeviceLists();
+                });
+            });
+            item.add_child(unblockBtn);
+            return item;
+        }
+
+        _clearDeviceLists() {
+            this._lastStatusOutput = null;
+            this._connectedSection.removeAll();
+            this._blockedSection.removeAll();
+
+            let connHeader = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
+            connHeader.label.add_style_class_name('hotspot-section-header');
+            this._connectedSection.addMenuItem(connHeader);
+            this._connectedSection.addMenuItem(new PopupMenu.PopupMenuItem('Hotspot is turned off', { reactive: false }));
+
+            let blockHeader = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
+            blockHeader.label.add_style_class_name('hotspot-section-header');
+            this._blockedSection.addMenuItem(blockHeader);
+
+            let username = GLib.get_user_name();
+            let blockedCount = 0;
+            let denyPath = GLib.get_user_config_dir() + '/wifi-hotspot.deny';
+            if (GLib.file_test(denyPath, GLib.FileTest.EXISTS)) {
+                try {
+                    let [ok, content] = GLib.file_get_contents(denyPath);
+                    if (ok) {
+                        let lines = new TextDecoder('utf-8').decode(content).split('\n');
+                        for (let line of lines) {
+                            if (!line.trim()) continue;
+                            blockedCount++;
+                            let bfields = line.split('|');
+                            let bmac = bfields[0];
+                            let bhost = bfields.length > 1 ? bfields[1] : bmac;
+                            this._blockedSection.addMenuItem(this._createBlockedItem(bmac, bhost, username));
+                        }
+                    }
+                } catch (e) { }
+            }
+
+            if (blockedCount === 0) {
+                this._blockedSection.addMenuItem(new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false }));
+            }
+        }
+
+        _updateDeviceLists() {
+            if (!this.checked) {
+                this._clearDeviceLists();
+                return;
+            }
+
             let username = GLib.get_user_name();
 
-            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list', '', username], (success, stdout) => {
-                let activeCount = 0;
-                if (success && stdout && stdout.trim()) {
-                    let lines = stdout.trim().split('\n');
-                    for (let line of lines) {
-                        if (line.trim()) activeCount++;
-                    }
-                }
-                this._clientCount = activeCount;
+            this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'status', '', username], (success, stdout) => {
+                if (this._destroyed || !this.menu.isOpen) return;
+                if (!success || !stdout) return;
 
-                if (!updateUi) return;
+                let outputText = stdout.trim();
+
+                if (this._lastStatusOutput === outputText) {
+                    return;
+                }
+                this._lastStatusOutput = outputText;
 
                 this._connectedSection.removeAll();
+                this._blockedSection.removeAll();
 
-                let header = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
-                header.label.add_style_class_name('bold');
-                this._connectedSection.addMenuItem(header);
+                let connHeader = new PopupMenu.PopupMenuItem('Connected Devices', { reactive: false });
+                connHeader.label.add_style_class_name('hotspot-section-header');
+                this._connectedSection.addMenuItem(connHeader);
 
-                if (success && stdout && stdout.trim()) {
-                    let lines = stdout.trim().split('\n');
+                let blockHeader = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
+                blockHeader.label.add_style_class_name('hotspot-section-header');
+                this._blockedSection.addMenuItem(blockHeader);
+
+                let activeCount = 0;
+                let blockedCount = 0;
+
+                let parts = outputText.split('===BLOCKED===');
+                let connPart = parts[0] ? parts[0].replace('===CONNECTED===', '').trim() : '';
+                let blockPart = parts[1] ? parts[1].trim() : '';
+
+                if (connPart) {
+                    let lines = connPart.split('\n');
                     for (let line of lines) {
-                        if (!line) continue;
-                        let parts = line.split('|');
-                        let mac = parts[0];
-                        let hostname = parts.length > 1 ? parts[1] : mac;
-                        let rxBytes = parts.length > 2 ? parseInt(parts[2], 10) || 0 : 0;
-                        let txBytes = parts.length > 3 ? parseInt(parts[3], 10) || 0 : 0;
-                        let bitrate = parts.length > 4 ? parts[4] : '';
-                        let ip = parts.length > 5 ? parts[5] : '';
+                        if (!line.trim()) continue;
+                        activeCount++;
+                        let fields = line.split('|');
+                        let mac = fields[0];
+                        let hostname = fields.length > 1 ? fields[1] : mac;
+                        let rxBytes = fields.length > 2 ? parseInt(fields[2], 10) || 0 : 0;
+                        let txBytes = fields.length > 3 ? parseInt(fields[3], 10) || 0 : 0;
+                        let bitrate = fields.length > 4 ? fields[4] : '';
+                        let ip = fields.length > 5 ? fields[5] : '';
 
-                        let item = new PopupMenu.PopupMenuItem('', { reactive: false });
+                        let item = new PopupMenu.PopupBaseMenuItem({ activate: false });
                         let infoBox = new St.BoxLayout({ vertical: true, x_expand: true });
-                        let nameLabel = new St.Label({ text: hostname, style: 'font-weight: 500;' });
+                        let nameLabel = new St.Label({
+                            text: hostname,
+                            style_class: 'hotspot-device-title',
+                        });
                         infoBox.add_child(nameLabel);
 
                         let totalBytes = rxBytes + txBytes;
@@ -349,102 +644,54 @@ const HotspotRouterToggle = GObject.registerClass(
                         if (ip && ip !== 'Unknown IP') subText += `${ip} • `;
                         subText += `${formatBytes(totalBytes)} transferred`;
                         if (bitrate) subText += ` • ${bitrate}`;
+
                         let subLabel = new St.Label({
                             text: subText,
-                            style: 'font-size: 0.82em; opacity: 0.7;'
+                            style_class: 'hotspot-device-subtitle',
                         });
                         infoBox.add_child(subLabel);
                         item.add_child(infoBox);
 
                         let blockBtn = new St.Button({
-                            style_class: 'button',
+                            style_class: 'button hotspot-action-btn',
                             child: new St.Label({
                                 text: 'Block',
-                                style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
+                                style_class: 'hotspot-action-btn-label',
                             }),
-                            style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 55px; height: 24px;',
                             x_align: Clutter.ActorAlign.CENTER,
                             y_align: Clutter.ActorAlign.CENTER,
                         });
 
                         blockBtn.connect('clicked', () => {
+                            this._lastStatusOutput = null;
                             this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'block', mac, username, hostname], () => {
-                                this._updateDeviceLists(true);
+                                this._updateDeviceLists();
                             });
                         });
                         item.add_child(blockBtn);
                         this._connectedSection.addMenuItem(item);
                     }
-                } else {
-                    let item = new PopupMenu.PopupMenuItem('No devices connected', { reactive: false });
-                    this._connectedSection.addMenuItem(item);
+                }
+
+                if (blockPart) {
+                    let lines = blockPart.split('\n');
+                    for (let line of lines) {
+                        if (!line.trim()) continue;
+                        blockedCount++;
+                        let bfields = line.split('|');
+                        let bmac = bfields[0];
+                        let bhost = bfields.length > 1 ? bfields[1] : bmac;
+                        this._blockedSection.addMenuItem(this._createBlockedItem(bmac, bhost, username));
+                    }
+                }
+
+                if (activeCount === 0) {
+                    this._connectedSection.addMenuItem(new PopupMenu.PopupMenuItem('No devices connected', { reactive: false }));
+                }
+                if (blockedCount === 0) {
+                    this._blockedSection.addMenuItem(new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false }));
                 }
             });
-
-            if (updateUi) {
-                this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'list_blocked', '', username], (success, stdout) => {
-                    this._blockedSection.removeAll();
-
-                    let header = new PopupMenu.PopupMenuItem('Blocked Devices', { reactive: false });
-                    header.label.add_style_class_name('bold');
-                    this._blockedSection.addMenuItem(header);
-
-                    if (success && stdout && stdout.trim()) {
-                        let lines = stdout.trim().split('\n');
-                        for (let line of lines) {
-                            if (!line) continue;
-                            let parts = line.split('|');
-                            let mac = parts[0];
-                            let hostname = parts.length > 1 ? parts[1] : mac;
-
-                            let item = new PopupMenu.PopupMenuItem(hostname, { reactive: false });
-
-                            let unblockBtn = new St.Button({
-                                style_class: 'button',
-                                child: new St.Label({
-                                    text: 'Unblock',
-                                    style: 'font-size: 11px; font-weight: 600; padding: 0; margin: 0;'
-                                }),
-                                style: 'padding: 2px 10px; margin-left: 8px; margin-right: 4px; min-width: 65px; height: 24px;',
-                                x_align: Clutter.ActorAlign.CENTER,
-                                y_align: Clutter.ActorAlign.CENTER,
-                            });
-
-                            unblockBtn.connect('clicked', () => {
-                                this._runCommand(['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients', 'unblock', mac, username], () => {
-                                    this._updateDeviceLists(true);
-                                });
-                            });
-                            item.add_child(unblockBtn);
-                            this._blockedSection.addMenuItem(item);
-                        }
-                    } else {
-                        let item = new PopupMenu.PopupMenuItem('No devices blocked', { reactive: false });
-                        this._blockedSection.addMenuItem(item);
-                    }
-                });
-            }
-        }
-
-        _readAdvancedConfig() {
-            let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
-            let config = { idleTimeout: 0, inhibitSleep: false };
-            if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
-                try {
-                    let [success, content] = GLib.file_get_contents(path);
-                    if (success) {
-                        let lines = (new TextDecoder('utf-8')).decode(content).split('\n');
-                        for (let line of lines) {
-                            let m = line.match(/^(\w+)\s*=\s*"(.*)"$/);
-                            if (m) {
-                                if (m[1] === 'IDLE_TIMEOUT') config.idleTimeout = parseInt(m[2], 10) || 0;
-                                else if (m[1] === 'INHIBIT_SLEEP') config.inhibitSleep = (m[2] === 'true');
-                            }
-                        }
-                    }
-                } catch(e) {}
-            }
-            return config;
         }
 
         _startPollingLoop() {
@@ -455,86 +702,36 @@ const HotspotRouterToggle = GObject.registerClass(
 
             this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
                 this._checkHotspotActiveState();
-                if (this.checked) {
-                    this._updateDeviceLists(this.menu.isOpen);
+                if (this.menu.isOpen && this.checked) {
+                    this._updateDeviceLists();
                 }
-
-                // Background idle timeout & sleep inhibitor handling
-                if (this.checked) {
-                    let adv = this._readAdvancedConfig();
-                    // Use the cached client count from _updateDeviceLists instead of
-                    // spawning a duplicate sudo subprocess every 3 seconds
-                    let count = this._clientCount;
-
-                    // Sleep inhibitor management
-                    if (adv.inhibitSleep && count > 0 && this._inhibitCookie === 0 && !this._inhibitPending) {
-                        this._inhibitPending = true;
-                        try {
-                            Gio.DBus.session.call(
-                                'org.gnome.SessionManager',
-                                '/org/gnome/SessionManager',
-                                'org.gnome.SessionManager',
-                                'Inhibit',
-                                new GLib.Variant('(susu)', ['wifi-hotspot-router', 0, 'Hotspot is actively sharing internet', 4]),
-                                null,
-                                Gio.DBusCallFlags.NONE,
-                                -1,
-                                null,
-                                (obj, res) => {
-                                    this._inhibitPending = false;
-                                    try {
-                                        let r = obj.call_finish(res);
-                                        this._inhibitCookie = r.deepUnpack()[0];
-                                    } catch(e) {}
-                                }
-                            );
-                        } catch(e) { this._inhibitPending = false; }
-                    } else if ((!adv.inhibitSleep || count === 0) && this._inhibitCookie > 0) {
-                        this._releaseInhibit();
-                        }
-
-                    // Auto-turn off when idle
-                    if (count === 0) {
-                        this._idleSeconds += 3;
-                        if (adv.idleTimeout > 0 && this._idleSeconds >= (adv.idleTimeout * 60)) {
-                            this._handleToggleEvent(false);
-                            this._idleSeconds = 0;
-                        }
-                    } else {
-                        this._idleSeconds = 0;
-                    }
-                } else {
-                    this._idleSeconds = 0;
-                    this._releaseInhibit();
-                }
-
                 return GLib.SOURCE_CONTINUE;
             });
         }
 
-        _releaseInhibit() {
-            if (this._inhibitCookie > 0) {
-                try {
-                    Gio.DBus.session.call(
-                        'org.gnome.SessionManager',
-                        '/org/gnome/SessionManager',
-                        'org.gnome.SessionManager',
-                        'Uninhibit',
-                        new GLib.Variant('(u)', [this._inhibitCookie]),
-                        null,
-                        Gio.DBusCallFlags.NONE,
-                        -1,
-                        null,
-                        null
-                    );
-                } catch(e) {}
-                this._inhibitCookie = 0;
-            }
-        }
-
         destroy() {
             this._destroyed = true;
-            this._releaseInhibit();
+            if (this._handoverRestartTimeoutId > 0) {
+                GLib.source_remove(this._handoverRestartTimeoutId);
+                this._handoverRestartTimeoutId = 0;
+            }
+            for (let { obj, id } of this._nmSignalIds) {
+                try {
+                    if (GObject.signal_handler_is_connected(obj, id)) {
+                        obj.disconnect(id);
+                    }
+                } catch (e) { }
+            }
+            this._nmSignalIds = [];
+            for (let { dev, id } of this._deviceSignalIds) {
+                try {
+                    if (GObject.signal_handler_is_connected(dev, id)) {
+                        dev.disconnect(id);
+                    }
+                } catch (e) { }
+            }
+            this._deviceSignalIds = [];
+
             if (this._timeoutId > 0) {
                 GLib.Source.remove(this._timeoutId);
                 this._timeoutId = 0;
@@ -543,29 +740,22 @@ const HotspotRouterToggle = GObject.registerClass(
                 this.menu.disconnect(this._openStateId);
                 this._openStateId = 0;
             }
-            // Force-kill any active subprocesses
+            if (this._settings && this._settingsChangedId > 0) {
+                this._settings.disconnect(this._settingsChangedId);
+                this._settingsChangedId = 0;
+            }
             for (let proc of this._activeSubprocesses) {
-                try { proc.force_exit(); } catch(e) {}
+                try { proc.force_exit(); } catch (e) { }
             }
             this._activeSubprocesses = [];
-            // Clean up temporary QR code files
-            if (this._lastQrFile) {
-                try { Gio.File.new_for_path(this._lastQrFile).delete(null); } catch(e) {}
-                this._lastQrFile = null;
-            }
-            // Clean up any orphaned QR files
+
+            let runtimeDir = GLib.get_user_runtime_dir() || '/tmp';
+            let username = GLib.get_user_name();
+            for (let i = 0; i < 2; i++) {
                 try {
-                    let dir = Gio.File.new_for_path('/tmp');
-                    let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-                    let info;
-                    while ((info = enumerator.next_file(null)) !== null) {
-                        let name = info.get_name();
-                        if (name.startsWith('wifi-hotspot-qr-') && name.endsWith('.png')) {
-                            try { Gio.File.new_for_path('/tmp/' + name).delete(null); } catch(e) {}
-                        }
-                    }
-                    try { enumerator.close(null); } catch(e) {}
-                } catch(e) {}
+                    Gio.File.new_for_path(GLib.build_filenamev([runtimeDir, `wifi-hotspot-qr-${username}-${i}.png`])).delete(null);
+                } catch (e) { }
+            }
             super.destroy();
         }
     });
@@ -575,11 +765,7 @@ const HotspotRouterIndicator = GObject.registerClass(
         _init(extension) {
             super._init();
             this._extension = extension;
-
-
             this._toggle = new HotspotRouterToggle(extension);
-
-
             this.quickSettingsItems.push(this._toggle);
         }
 
@@ -598,19 +784,14 @@ export default class HotspotRouterExtension extends Extension {
         const quickSettings = Main.panel.statusArea.quickSettings;
         quickSettings.addExternalIndicator(this._indicator);
 
-        // Attempt repositioning immediately, then retry periodically
-        // because _setupIndicators() is async in GNOME Shell and
-        // Wi-Fi/Bluetooth toggles may not exist yet on some distros (Ubuntu)
-        this._repositionAttempts = 0;
-        this._repositionTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
-            this._repositionAttempts++;
-            const success = this._repositionToggle(quickSettings);
-            if (success || this._repositionAttempts >= 10) {
-                this._repositionTimerId = 0;
+        if (!this._repositionToggle(quickSettings)) {
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                if (this._indicator) {
+                    this._repositionToggle(quickSettings);
+                }
                 return GLib.SOURCE_REMOVE;
-            }
-            return GLib.SOURCE_CONTINUE;
-        });
+            });
+        }
     }
 
     _repositionToggle(quickSettings) {
@@ -624,61 +805,47 @@ export default class HotspotRouterExtension extends Extension {
             const children = grid.get_children();
             if (!children || children.length === 0) return false;
 
-            // Find the Wi-Fi / Network toggle in the grid
             const networkItems = quickSettings._network?.quickSettingsItems;
-            let sibling = null;
+            let targetSibling = null;
+            let placeAbove = true;
 
             if (networkItems && networkItems.length > 0) {
-                // Place hotspot right after the last network quick settings item
-                const lastNetItem = networkItems[networkItems.length - 1];
-                const netIdx = children.indexOf(lastNetItem);
-                if (netIdx !== -1 && netIdx + 1 < children.length) {
-                    sibling = children[netIdx + 1];
-                }
-            }
-
-            // Fallback: place before Bluetooth toggle
-            if (!sibling && quickSettings._bluetooth?.quickSettingsItems?.length > 0) {
-                sibling = quickSettings._bluetooth.quickSettingsItems[0];
-            }
-
-            // Fallback: search grid children for any network-wireless icon toggle
-            if (!sibling) {
+                targetSibling = networkItems[networkItems.length - 1];
+                placeAbove = true;
+            } else if (quickSettings._bluetooth?.quickSettingsItems?.length > 0) {
+                targetSibling = quickSettings._bluetooth.quickSettingsItems[0];
+                placeAbove = false;
+            } else {
                 for (let child of children) {
                     if (child !== toggle && child.iconName &&
                         child.iconName.includes('network-wireless') &&
                         !child.iconName.includes('hotspot')) {
-                        const idx = children.indexOf(child);
-                        if (idx !== -1 && idx + 1 < children.length) {
-                            sibling = children[idx + 1];
-                        }
+                        targetSibling = child;
+                        placeAbove = true;
                         break;
                     }
                 }
             }
 
-            if (sibling && sibling !== toggle) {
-                grid.set_child_below_sibling(toggle, sibling);
+            if (targetSibling && targetSibling !== toggle) {
+                if (placeAbove) {
+                    grid.set_child_above_sibling(toggle, targetSibling);
+                } else {
+                    grid.set_child_below_sibling(toggle, targetSibling);
+                }
                 return true;
             }
 
             return false;
         } catch (e) {
-            console.error(`[HotspotRouter] Failed to reposition toggle beside Wi-Fi: ${e.message}`);
             return false;
         }
     }
 
     disable() {
-        if (this._repositionTimerId) {
-            GLib.Source.remove(this._repositionTimerId);
-            this._repositionTimerId = 0;
-        }
-
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;
         }
     }
 }
-

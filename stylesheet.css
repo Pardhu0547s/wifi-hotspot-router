@@ -1,3 +1,39 @@
-.bold {
+/* Wi-Fi Hotspot Router Stylesheet */
+
+.hotspot-section-header {
     font-weight: bold;
+}
+
+.hotspot-scrollview {
+    max-height: 400px;
+    padding: 0;
+    margin: 0;
+}
+
+.hotspot-qr-container {
+    padding: 12px 0;
+}
+
+.hotspot-device-title {
+    font-weight: 500;
+}
+
+.hotspot-device-subtitle {
+    font-size: 0.82em;
+    opacity: 0.7;
+}
+
+.hotspot-action-btn {
+    padding: 2px 10px;
+    margin-left: 8px;
+    margin-right: 4px;
+    min-width: 55px;
+    height: 24px;
+}
+
+.hotspot-action-btn-label {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0;
+    margin: 0;
 }

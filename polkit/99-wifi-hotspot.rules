@@ -1,0 +1,10 @@
+// Polkit rule for Wi-Fi Hotspot Router GNOME Shell Extension
+// Authorizes local active users to manage only their own hotspot systemd service
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units") {
+        var unit = action.lookup("unit");
+        if (unit && subject.user && unit === ("wifi-hotspot@" + subject.user + ".service") && subject.local && subject.active) {
+            return polkit.Result.YES;
+        }
+    }
+});

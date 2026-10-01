@@ -1,22 +1,26 @@
 #!/bin/bash
+# Wi-Fi Hotspot Router - Automated Deployment & Setup
+# Installs system dependencies, engine scripts, systemd units, polkit rules, and GNOME extension files.
 
-# Exit on error
 set -e
 
-# Configuration constraints
 UUID="wifi-hotspot-router@pardhu0547s.github.com"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [ -n "$SUDO_USER" ]; then
     USER_NAME="$SUDO_USER"
     REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+elif [ -n "$PKEXEC_UID" ]; then
+    USER_NAME=$(getent passwd "$PKEXEC_UID" | cut -d: -f1)
+    REAL_HOME=$(getent passwd "$PKEXEC_UID" | cut -d: -f6)
 else
     USER_NAME=$(whoami)
     REAL_HOME="$HOME"
 fi
 TARGET_DIR="$REAL_HOME/.local/share/gnome-shell/extensions/$UUID"
 
-echo "=== Phase 0: Checking and Installing Dependencies across Linux Distributions ==="
-# Detect Package Manager
+echo "=== Phase 1: Package Manager Dependencies ==="
+
 if command -v apt-get >/dev/null 2>&1; then
     PKG_MGR="apt"
 elif command -v dnf >/dev/null 2>&1; then
@@ -29,7 +33,6 @@ else
     PKG_MGR="unknown"
 fi
 
-# Ensure essential tools exist
 MISSING_TOOLS=()
 for tool in hostapd dnsmasq iw iptables ip qrencode glib-compile-schemas python3 pkexec; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -38,12 +41,11 @@ for tool in hostapd dnsmasq iw iptables ip qrencode glib-compile-schemas python3
 done
 
 if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
-    echo "[!] Missing tools detected: ${MISSING_TOOLS[*]}"
-    echo "[+] Attempting automated installation via $PKG_MGR..."
+    echo "Installing required packages via $PKG_MGR (${MISSING_TOOLS[*]})..."
     case "$PKG_MGR" in
         apt)
             sudo apt-get update -y || true
-            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 libglib2.0-bin procps policykit-1
+            sudo apt-get install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 libglib2.0-bin procps pkexec polkitd
             ;;
         dnf)
             sudo dnf install -y hostapd dnsmasq iw iptables iproute qrencode python3 glib2-devel procps-ng polkit
@@ -55,869 +57,114 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
             sudo zypper install -y hostapd dnsmasq iw iptables iproute2 qrencode python3 glib2-devel procps polkit
             ;;
         *)
-            echo "[-] Warning: Unknown package manager. Please ensure the following packages are installed manually: ${MISSING_TOOLS[*]}"
+            echo "Warning: Unknown package manager. Ensure the following tools are installed: ${MISSING_TOOLS[*]}"
             ;;
     esac
 else
-    echo "[+] All required system tools are present."
+    echo "All core system dependencies are satisfied."
 fi
 
-# Ensure create_ap is installed
-if ! command -v create_ap >/dev/null 2>&1 && [ ! -f "/usr/bin/create_ap" ] && [ ! -f "/usr/local/bin/create_ap" ]; then
-    echo "[+] create_ap script not found. Fetching from official upstream repository..."
-    if command -v curl >/dev/null 2>&1; then
-        sudo curl -sSL https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
-        sudo chmod +x /usr/bin/create_ap
-    elif command -v wget >/dev/null 2>&1; then
-        sudo wget -qO /usr/bin/create_ap https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap
-        sudo chmod +x /usr/bin/create_ap
+# Locate or download create_ap
+CREATE_AP_PATH=$(command -v create_ap || true)
+if [ -z "$CREATE_AP_PATH" ]; then
+    if [ -x "/usr/local/bin/create_ap" ]; then
+        CREATE_AP_PATH="/usr/local/bin/create_ap"
+    elif [ -x "/usr/bin/create_ap" ]; then
+        CREATE_AP_PATH="/usr/bin/create_ap"
     else
-        echo "[-] Error: create_ap missing and neither curl nor wget found."
-        exit 1
+        echo "Fetching create_ap from upstream repository into /usr/local/bin/create_ap..."
+        if command -v curl >/dev/null 2>&1; then
+            sudo curl -sSL https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/local/bin/create_ap
+            sudo chmod +x /usr/local/bin/create_ap
+            CREATE_AP_PATH="/usr/local/bin/create_ap"
+        elif command -v wget >/dev/null 2>&1; then
+            sudo wget -qO /usr/local/bin/create_ap https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap
+            sudo chmod +x /usr/local/bin/create_ap
+            CREATE_AP_PATH="/usr/local/bin/create_ap"
+        else
+            echo "Error: create_ap is not installed and neither curl nor wget was found." >&2
+            exit 1
+        fi
     fi
 fi
+echo "Using create_ap at $CREATE_AP_PATH"
 
-CREATE_AP_PATH=$(command -v create_ap || echo "/usr/bin/create_ap")
-echo "[+] Using create_ap at $CREATE_AP_PATH"
-
-echo -e "\n=== Phase 1: Compiling GSettings Schemas ==="
+echo "=== Phase 2: Schema Compilation ==="
 if [ -d "$SOURCE_DIR/schemas" ]; then
     glib-compile-schemas "$SOURCE_DIR/schemas"
-    echo "[+] GSettings schemas compiled successfully."
-else
-    echo "[-] Error: schemas directory not found."
-    exit 1
+    echo "Schemas compiled successfully."
 fi
 
-echo -e "\n=== Phase 2: Restoring and Patching create_ap ==="
+echo "=== Phase 3: Patching create_ap ==="
 if [ -f "${CREATE_AP_PATH}.bak" ]; then
-    echo "[+] Restoring $CREATE_AP_PATH from backup..."
     sudo cp "${CREATE_AP_PATH}.bak" "$CREATE_AP_PATH"
 else
-    echo "[+] Backing up original $CREATE_AP_PATH..."
     sudo cp "$CREATE_AP_PATH" "${CREATE_AP_PATH}.bak"
 fi
-
-echo "[+] Patching $CREATE_AP_PATH for Client Limits, MAC Filter, and 5GHz AP support..."
-sudo python3 "$SOURCE_DIR/patch_create_ap.py" "$CREATE_AP_PATH"
-echo "[+] $CREATE_AP_PATH successfully patched."
-
-echo -e "\n=== Phase 3: Installing Universal Network Engine (start_hotspot & stop_hotspot) ==="
-# start_hotspot
-sudo tee /usr/local/bin/start_hotspot > /dev/null <<\EOF_START
-#!/bin/bash
-
-USER_NAME="$1"
-if [ -z "$USER_NAME" ]; then
-    echo "Error: Username parameter is required."
-    exit 1
-fi
-
-CONFIG_FILE="/home/$USER_NAME/.config/wifi-hotspot.conf"
-
-# Default fallback values
-SSID="hotspot"
-USE_PASSWORD="true"
-PASSWORD="none"
-MAX_CLIENTS="10"
-BAND="bg"
-DNS_PROFILE="system"
-SECURITY_MODE="wpa2"
-ISOLATE_CLIENTS="false"
-IDLE_TIMEOUT="0"
-INHIBIT_SLEEP="false"
-
-if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
-fi
-
-# Locate core tools dynamically
-IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
-IP_BIN=$(command -v ip || echo "/usr/bin/ip")
-NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
-SYSCTL_BIN=$(command -v sysctl || echo "/usr/sbin/sysctl")
-IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
-SYSTEMCTL_BIN=$(command -v systemctl || echo "/usr/bin/systemctl")
-CREATE_AP_BIN=$(command -v create_ap || echo "/usr/bin/create_ap")
-
-# 1. Detect all available Wi-Fi interfaces
-mapfile -t WIFI_INTERFACES < <($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]')
-
-if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
-    echo "Error: No Wi-Fi interface found."
-    exit 1
-fi
-
-# 2. Detect if any Wi-Fi interface is actively connected to an external network
-IS_WIFI_CONNECTED=0
-ACTIVE_WIFI_IFACE=""
-for w in "${WIFI_INTERFACES[@]}"; do
-    if $IW_BIN dev "$w" link 2>/dev/null | grep -q "^Connected to" || \
-       ($NMCLI_BIN -t -f DEVICE,STATE dev 2>/dev/null | grep -E "^$w:connected" >/dev/null 2>&1); then
-        IS_WIFI_CONNECTED=1
-        ACTIVE_WIFI_IFACE="$w"
-        break
-    fi
-done
-
-# Detect default internet interface and route
-DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
-DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
-
-# Clean up previous virtual interfaces unconditionally to avoid AP interface limit errors (e.g., #{ AP } <= 1)
-for w in "${WIFI_INTERFACES[@]}"; do
-    if [ "$IS_WIFI_CONNECTED" -eq 0 ]; then
-        $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
-    fi
-    $IW_BIN dev "${w}_ap" del 2>/dev/null || true
-done
-$IW_BIN dev ap0 del 2>/dev/null || true
-$IW_BIN dev ap1 del 2>/dev/null || true
-
-# 3. Stop conflicting standalone dnsmasq service (if present)
-# Only stop system dnsmasq if it's not being used by libvirt or other services
-if ! systemctl is-active --quiet libvirtd 2>/dev/null; then
-    $SYSTEMCTL_BIN stop dnsmasq 2>/dev/null || true
-fi
-
-# 4. Universal Firewall Handling across distributions
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
-    ufw allow in on ap0 2>/dev/null || true
-    ufw route allow in on ap0 2>/dev/null || true
-fi
-
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qw "running"; then
-    firewall-cmd --zone=trusted --add-interface=ap0 2>/dev/null || true
-fi
-
-# 5. Kernel-level network performance and gigabit IP forwarding tuning
-$SYSCTL_BIN -w net.ipv4.ip_forward=1 2>/dev/null || true
-$SYSCTL_BIN -w net.core.netdev_max_backlog=10000 2>/dev/null || true
-$SYSCTL_BIN -w net.core.rmem_max=16777216 2>/dev/null || true
-$SYSCTL_BIN -w net.core.wmem_max=16777216 2>/dev/null || true
-$SYSCTL_BIN -w net.core.rmem_default=262144 2>/dev/null || true
-$SYSCTL_BIN -w net.core.wmem_default=262144 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_rmem="4096 87380 16777216" 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_wmem="4096 65536 16777216" 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_sack=1 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.ip_no_pmtu_disc=0 2>/dev/null || true
-# Google BBR congestion control for dramatically improved throughput
-$SYSCTL_BIN -w net.core.default_qdisc=fq 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_ecn=1 2>/dev/null || true
-$SYSCTL_BIN -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
-
-# TCP MSS Clamping to eliminate PMTU packet fragmentation and unlock maximum throughput
-$IPTABLES_BIN -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    $IPTABLES_BIN -t mangle -I FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-$IPTABLES_BIN -t mangle -C POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-    $IPTABLES_BIN -t mangle -I POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-
-# 6. Setup Max Clients and Deny MAC File in environment
-if [ "$MAX_CLIENTS" -ne "0" ] 2>/dev/null; then
-    export MAX_NUM_STA="$MAX_CLIENTS"
-else
-    unset MAX_NUM_STA
-fi
-
-UI_DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
-touch "$UI_DENY_FILE"
-export DENY_MAC_FILE="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
-awk -F'|' '{print $1}' "$UI_DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$DENY_MAC_FILE" 2>/dev/null || true
-touch "$DENY_MAC_FILE"
-
-# Apply iptables DROP rules for all previously blocked MACs
-while IFS= read -r blocked_mac; do
-    if [ -n "$blocked_mac" ]; then
-        $IPTABLES_BIN -C FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || \
-            $IPTABLES_BIN -I FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
-    fi
-done < "$DENY_MAC_FILE"
-
-# 7. Regulatory Domain Management
-CURRENT_REG=$($IW_BIN reg get 2>/dev/null | awk '/country/{print $2}' | tr -d ':' | head -n 1)
-if [ "$CURRENT_REG" = "00" ] || [ -z "$CURRENT_REG" ]; then
-    LOCALE_COUNTRY=$(locale | grep -m1 LC_NAME | cut -d_ -f2 | cut -d. -f1 | cut -d@ -f1)
-    [ -z "$LOCALE_COUNTRY" ] && LOCALE_COUNTRY=$(locale | grep -m1 LANG | cut -d_ -f2 | cut -d. -f1 | cut -d@ -f1)
-    if [ ${#LOCALE_COUNTRY} -eq 2 ]; then
-        $IW_BIN reg set "$LOCALE_COUNTRY" 2>/dev/null || true
-        CURRENT_REG="$LOCALE_COUNTRY"
-    else
-        $IW_BIN reg set IN 2>/dev/null || true
-        CURRENT_REG="IN"
-    fi
-fi
-
-# Dynamic subnet collision prevention helper
-get_safe_gateway() {
-    local existing_routes existing_addrs candidate net_prefix
-    existing_routes=$($IP_BIN -4 route show 2>/dev/null | awk '{print $1}')
-    existing_addrs=$($IP_BIN -4 addr show 2>/dev/null | awk '/inet /{print $2}')
-
-    for candidate in "192.168.12.1" "192.168.199.1" "192.168.188.1" "192.168.177.1" "10.0.99.1"; do
-        net_prefix=$(echo "$candidate" | cut -d. -f1-3)
-        if ! echo "$existing_routes $existing_addrs" | grep -q "$net_prefix"; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-    echo "192.168.199.1"
-}
-
-SAFE_GATEWAY=$(get_safe_gateway)
-
-CMD_ARGS=(--ieee80211n -g "$SAFE_GATEWAY")
-if [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ]; then
-    CMD_ARGS+=(--country "$CURRENT_REG")
-fi
-MODE_LABEL="2.4G"
-
-# Hardware-accelerated High-Throughput capabilities
-HT_CAPAB_OPTS='[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
-VHT_CAPAB_OPTS='[SHORT-GI-80][MAX-A-MPDU-LEN-EXP7][RXLDPC][RX-STBC-1][TX-STBC-2BY1]'
-
-# Dynamic 2.4GHz HT capability helper (HT40+ for channels 1-7, HT40- for channels 8-13)
-get_24g_ht_capab() {
-    local ch="$1"
-    if [ "$ch" -ge 8 ] 2>/dev/null; then
-        echo '[HT40-][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
-    else
-        echo '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
-    fi
-}
-
-# Check if Wi-Fi hardware supports IEEE 802.11ax (HE) AP mode
-HAS_AX=0
-if [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
-    PHY_NAME=$($IW_BIN dev "${WIFI_INTERFACES[0]}" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
-    if [ -n "$PHY_NAME" ] && $IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -A 5 "HE Iftypes" | grep -qw "AP"; then
-        HAS_AX=1
-    fi
-fi
-
-if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
-    # =========================================================================
-    # SCENARIO B: Connected to Wi-Fi (Wi-Fi Repeater / Hotspot while on Wi-Fi)
-    # Also seamlessly handles VPN active over Wi-Fi (tun*, wg*, tap*)!
-    # CRITICAL: DO NOT DISCONNECT WI-FI!
-    # =========================================================================
-    INTERNET_IFACE="$DEFAULT_IFACE"
-    [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$ACTIVE_WIFI_IFACE"
-    
-    if [ ${#WIFI_INTERFACES[@]} -ge 2 ]; then
-        # Subcase B1: Multiple Wi-Fi adapters available
-        for w in "${WIFI_INTERFACES[@]}"; do
-            if [ "$w" != "$ACTIVE_WIFI_IFACE" ]; then
-                WIFI_IFACE="$w"
-                break
-            fi
-        done
-        [ -z "$WIFI_IFACE" ] && WIFI_IFACE="${WIFI_INTERFACES[0]}"
-
-        # Check if 5GHz transmission is permitted
-        ALLOWED_5G_CHAN=""
-        if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
-        fi
-        if [ "$BAND" = "a" ] && [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
-            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-            MODE_LABEL="5G"
-        else
-            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
-            MODE_LABEL="2.4G"
-        fi
-    else
-        # Subcase B2: Single physical Wi-Fi adapter (STA + AP concurrent mode)
-        WIFI_IFACE="$ACTIVE_WIFI_IFACE"
-        
-        # Read the channel the Wi-Fi card is currently connected to
-        CURRENT_CHAN=$($IW_BIN dev "$WIFI_IFACE" info 2>/dev/null | awk '/channel/{print $2}')
-        if [ -z "$CURRENT_CHAN" ]; then
-            CURRENT_CHAN=$($NMCLI_BIN -t -f active,chan dev wifi 2>/dev/null | grep '^yes:' | cut -d: -f2 | head -n 1)
-        fi
-        [ -z "$CURRENT_CHAN" ] && CURRENT_CHAN=6
-        
-        # CRITICAL FIX FOR IWLWIFI AND REALTEK:
-        # create_ap's automatic virtual interface creation fails with "Device or resource busy"
-        # because it tries to change MAC address after creation.
-        # Workaround: Manually create a virtual interface (ap0), generate a guaranteed valid 
-        # locally administered MAC, bring it up, and pass it to create_ap using --no-virt.
-        $IW_BIN dev "${WIFI_IFACE}_ap" del 2>/dev/null || true
-        $IW_BIN dev ap0 del 2>/dev/null || true
-        $IW_BIN dev "$WIFI_IFACE" interface add ap0 type __ap 2>/dev/null || true
-        
-        # Generate locally administered MAC safely
-        ORIG_MAC=$(cat "/sys/class/net/$WIFI_IFACE/address" 2>/dev/null)
-        if [ -n "$ORIG_MAC" ]; then
-            IFS=':' read -r -a MAC_BYTES <<< "$ORIG_MAC"
-            FIRST_BYTE=$(printf "%02x" $(( 16#${MAC_BYTES[0]} | 0x02 )))
-            LAST_BYTE=$(printf "%02x" $(( (16#${MAC_BYTES[5]} + 1) % 256 )))
-            NEW_MAC="${FIRST_BYTE}:${MAC_BYTES[1]}:${MAC_BYTES[2]}:${MAC_BYTES[3]}:${MAC_BYTES[4]}:${LAST_BYTE}"
-            $IP_BIN link set dev ap0 address "$NEW_MAC" 2>/dev/null || true
-        fi
-        
-        # Tell create_ap to use the pre-created ap0 without attempting virtual magic
-        CMD_ARGS+=(--no-virt)
-        WIFI_IFACE="ap0"
-        
-        # Match channel and band to current Wi-Fi connection
-        if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
-            if [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ]; then
-                echo "[!] Notice: Upstream Wi-Fi is connected on 5GHz DFS Channel $CURRENT_CHAN (Radar Restricted)."
-                echo "[!] Single-card concurrency cannot perform 60s radar CAC while actively connected to Wi-Fi."
-                echo "[!] Gracefully disconnecting Wi-Fi to start dedicated AP on clean Channel 6..."
-                echo "2.4G (DFS Fallback)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
-                $NMCLI_BIN dev disconnect "$ACTIVE_WIFI_IFACE" 2>/dev/null || true
-                $NMCLI_BIN dev set "$ACTIVE_WIFI_IFACE" managed no 2>/dev/null || true
-                $IW_BIN dev ap0 del 2>/dev/null || true
-                sleep 0.5
-                WIFI_IFACE="$ACTIVE_WIFI_IFACE"
-                INTERNET_IFACE="$DEFAULT_IFACE"
-                [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$WIFI_IFACE"
-                CMD_ARGS=(--ieee80211n)
-                [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && CMD_ARGS+=(--country "$CURRENT_REG")
-                CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
-                MODE_LABEL="2.4G (DFS Fallback)"
-            else
-                CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
-                [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-                MODE_LABEL="Repeater 5G"
-            fi
-        else
-            HT_CAPAB_24G=$(get_24g_ht_capab "$CURRENT_CHAN")
-            CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
-            MODE_LABEL="Repeater 2.4G"
-        fi
-    fi
-
-elif [ -n "$DEFAULT_IFACE" ]; then
-    # =========================================================================
-    # SCENARIO A: Ethernet / USB Tethering / Cellular / Standalone VPN (LAN active)
-    # =========================================================================
-    WIFI_IFACE="${WIFI_INTERFACES[0]}"
-    INTERNET_IFACE="$DEFAULT_IFACE"
-    
-    # Wi-Fi radio is not connected to external network, ensure interface is clean
-    $NMCLI_BIN dev disconnect "$WIFI_IFACE" 2>/dev/null || true
-    $NMCLI_BIN dev set "$WIFI_IFACE" managed no 2>/dev/null || true
-    sleep 0.5
-    
-        # Smart channel selection: pick least congested 2.4GHz channel
-        BEST_CHAN=6
-        if command -v iw >/dev/null 2>&1; then
-            SCAN_RESULT=$($IW_BIN dev "$WIFI_IFACE" scan dump 2>/dev/null | grep -E 'DS Parameter set: channel' | awk '{print $NF}' | sort | uniq -c | sort -n)
-            for TEST_CHAN in 1 6 11; do
-                CHAN_COUNT=$(echo "$SCAN_RESULT" | grep " ${TEST_CHAN}$" | awk '{print $1}')
-                [ -z "$CHAN_COUNT" ] && CHAN_COUNT=0
-                if [ -z "$BEST_COUNT" ] || [ "$CHAN_COUNT" -lt "$BEST_COUNT" ]; then
-                    BEST_COUNT="$CHAN_COUNT"
-                    BEST_CHAN="$TEST_CHAN"
-                fi
-            done
-        fi
-
-    if [ "$BAND" = "a" ]; then
-        # Check if 5GHz transmission is permitted
-        ALLOWED_5G_CHAN=""
-        if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
-        fi
-        if [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
-            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-            MODE_LABEL="5G"
-        else
-            echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter without active Wi-Fi association."
-            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel $BEST_CHAN)..."
-            HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
-            CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
-            MODE_LABEL="2.4G (5G NO-IR fallback)"
-        fi
-    else
-        HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
-        CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
-        MODE_LABEL="2.4G"
-    fi
-
-else
-    # =========================================================================
-    # SCENARIO C: Offline mode (No internet route / Local Network)
-    # =========================================================================
-    WIFI_IFACE="${WIFI_INTERFACES[0]}"
-    INTERNET_IFACE="$WIFI_IFACE"
-    
-    if [ "$BAND" = "a" ]; then
-        ALLOWED_5G_CHAN=""
-        if [ -n "$PHY_NAME" ]; then
-            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
-            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
-        fi
-        if [ -n "$ALLOWED_5G_CHAN" ]; then
-            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_OPTS" --vht_capab "$VHT_CAPAB_OPTS")
-            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
-            MODE_LABEL="5G"
-        else
-            echo "[!] Notice: 5GHz Initiate-Radiation (IR) is restricted on this wireless adapter."
-            echo "[!] Gracefully starting hotspot on high-speed 2.4GHz (Channel 6)..."
-            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
-            MODE_LABEL="2.4G (5G NO-IR fallback)"
-        fi
-    else
-        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$HT_CAPAB_OPTS")
-        MODE_LABEL="2.4G"
-    fi
-fi
-
-# Store active mode label for GNOME Shell UI
-echo "$MODE_LABEL" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
-
-# Configure upstream DNS servers based on profile
-DNS_SERVERS=""
-case "$DNS_PROFILE" in
-    adguard)
-        DNS_SERVERS="94.140.14.14,94.140.15.15"
-        ;;
-    quad9)
-        DNS_SERVERS="9.9.9.9,149.112.112.112"
-        ;;
-    google)
-        DNS_SERVERS="8.8.8.8,8.8.4.4"
-        ;;
-    cloudflare)
-        DNS_SERVERS="1.1.1.1,8.8.8.8"
-        ;;
-    system|disabled|none|*)
-        DNS_SERVERS=""
-        ;;
-esac
-
-if [ -n "$DNS_SERVERS" ]; then
-    CMD_ARGS+=(--dhcp-dns "$DNS_SERVERS")
-fi
-
-# Security Mode Handling
-if [ "$USE_PASSWORD" = "true" ]; then
-    if [ "$SECURITY_MODE" = "wpa3" ] || [ "$SECURITY_MODE" = "wpa3-only" ]; then
-        CMD_ARGS+=(-w 3-only)
-    elif [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
-        CMD_ARGS+=(-w 3)
-    else
-        CMD_ARGS+=(-w 2)
-    fi
-fi
-
-# Optional Client Isolation
-if [ "$ISOLATE_CLIENTS" = "true" ]; then
-    CMD_ARGS+=(--isolate-clients)
-fi
-
-CMD_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
-
-if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
-    CMD_ARGS+=("$PASSWORD")
-fi
-
-# Clean up any leftover virtual interface before launch (only if not pre-created)
-if [ "$WIFI_IFACE" != "ap0" ]; then
-    $IW_BIN dev ap0 del 2>/dev/null || true
-fi
-
-# Store active username for hostapd_action.sh
-echo "$USER_NAME" > /tmp/wifi-hotspot-active-user 2>/dev/null || true
-
-# Execute create_ap with resilient auto-fallback
-$CREATE_AP_BIN "${CMD_ARGS[@]}"
-EXIT_CODE=$?
-
-# If create_ap exited with error, automatically recover on high-speed 2.4GHz!
-if [ $EXIT_CODE -ne 0 ]; then
-    echo "[!] Hotspot startup returned exit code $EXIT_CODE. Automatically recovering on 2.4GHz..."
-    echo "2.4G (Auto-Fallback)" > /tmp/wifi-hotspot-active-mode 2>/dev/null || true
-    $IW_BIN dev ap0 del 2>/dev/null || true
-    sleep 1
-
-    REAL_WIFI_IFACE="${WIFI_INTERFACES[0]}"
-    $NMCLI_BIN dev disconnect "$REAL_WIFI_IFACE" 2>/dev/null || true
-    $NMCLI_BIN dev set "$REAL_WIFI_IFACE" managed no 2>/dev/null || true
-    $IW_BIN dev "${REAL_WIFI_IFACE}_ap" del 2>/dev/null || true
-
-    INTERNET_IFACE="$DEFAULT_IFACE"
-    [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$REAL_WIFI_IFACE"
-
-    FALLBACK_ARGS=(--ieee80211n -g "$SAFE_GATEWAY")
-    [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && FALLBACK_ARGS+=(--country "$CURRENT_REG")
-    FALLBACK_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
-    [ -n "$DNS_SERVERS" ] && FALLBACK_ARGS+=(--dhcp-dns "$DNS_SERVERS")
-    if [ "$USE_PASSWORD" = "true" ]; then
-        if [ "$SECURITY_MODE" = "wpa3" ] || [ "$SECURITY_MODE" = "wpa3-only" ]; then
-            FALLBACK_ARGS+=(-w 3-only)
-        elif [ "$SECURITY_MODE" = "wpa3-mixed" ]; then
-            FALLBACK_ARGS+=(-w 3)
-        else
-            FALLBACK_ARGS+=(-w 2)
-        fi
-    fi
-    [ "$ISOLATE_CLIENTS" = "true" ] && FALLBACK_ARGS+=(--isolate-clients)
-    FALLBACK_ARGS+=("$REAL_WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
-    if [ "$USE_PASSWORD" = "true" ] && [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
-        FALLBACK_ARGS+=("$PASSWORD")
-    fi
-    exec $CREATE_AP_BIN "${FALLBACK_ARGS[@]}"
-fi
-
-exit $EXIT_CODE
-EOF_START
-sudo chmod +x /usr/local/bin/start_hotspot
-
-# stop_hotspot
-sudo tee /usr/local/bin/stop_hotspot > /dev/null <<\EOF_STOP
-#!/bin/bash
-IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
-IP_BIN=$(command -v ip || echo "/usr/bin/ip")
-CREATE_AP_BIN=$(command -v create_ap || echo "/usr/bin/create_ap")
-NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
-
-$CREATE_AP_BIN --stop ap0 2>/dev/null || true
-$CREATE_AP_BIN --stop ap1 2>/dev/null || true
-
-for instance in /tmp/create_ap.*; do
-    if [ -d "$instance" ]; then
-        ifile=$(basename "$instance" | cut -d. -f2)
-        if [ -n "$ifile" ] && [ "$ifile" != "*" ]; then
-            $CREATE_AP_BIN --stop "$ifile" 2>/dev/null || true
-        fi
-    fi
-done
-
-for w in $($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]'); do
-    $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
-    $IW_BIN dev "${w}_ap" del 2>/dev/null || true
-    $NMCLI_BIN dev set "$w" managed yes 2>/dev/null || true
-done
-
-$IW_BIN dev ap0 del 2>/dev/null || true
-$IW_BIN dev ap1 del 2>/dev/null || true
-
-# UFW cleanup
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
-    ufw route delete allow in on ap0 2>/dev/null || true
-    ufw delete allow in on ap0 2>/dev/null || true
-    for iface in $($IP_BIN -o link show 2>/dev/null | awk -F': ' '{print $2}' | awk '{print $1}'); do
-        ufw route delete allow in on ap0 out on "$iface" 2>/dev/null || true
-    done
-fi
-
-# Firewalld cleanup
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qw "running"; then
-    firewall-cmd --zone=trusted --remove-interface=ap0 2>/dev/null || true
-fi
-
-# TCP MSS Clamping cleanup
-iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
-
-# Traffic shaping cleanup
-tc qdisc del dev ap0 root 2>/dev/null || true
-tc qdisc del dev ap1 root 2>/dev/null || true
-
-rm -f /tmp/wifi-hotspot-active-mode 2>/dev/null || true
-EOF_STOP
-sudo chmod +x /usr/local/bin/stop_hotspot
-
-# manage_hotspot_clients
-sudo tee /usr/local/bin/manage_hotspot_clients > /dev/null <<\EOF_MANAGE
-#!/bin/bash
-ACTION="$1"
-MAC="$2"
-USER_NAME="$3"
-
-IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
-IP_BIN=$(command -v ip || echo "/usr/bin/ip")
-TC_BIN=$(command -v tc || echo "/usr/sbin/tc")
-IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
-HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
-
-DENY_FILE="/home/$USER_NAME/.config/wifi-hotspot.deny"
-CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | grep -i "UP" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
-[ -z "$IFACE" ] && IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
-
-apply_traffic_limits() {
-    local USER="$1"
-    local LIMITS_FILE="/home/$USER/.config/wifi-hotspot-limits.conf"
-    local AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | grep -i "UP" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
-    [ -z "$AP_IFACE" ] && AP_IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
-    [ -z "$AP_IFACE" ] && return 0
-
-    if [ ! -f "$LIMITS_FILE" ] || [ ! -s "$LIMITS_FILE" ]; then
-        $TC_BIN qdisc del dev "$AP_IFACE" root 2>/dev/null || true
-        return 0
-    fi
-
-    local LEASES_FILE=$(ls /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | head -1)
-    [ -z "$LEASES_FILE" ] && return 0
-
-    # Initialize root HTB qdisc and unthrottled line-rate default class (10 Gbps maximum headroom)
-    $TC_BIN qdisc add dev "$AP_IFACE" root handle 1: htb default 10 r2q 100 2>/dev/null || true
-    $TC_BIN class replace dev "$AP_IFACE" parent 1: classid 1:10 htb rate 10000mbit ceil 10000mbit quantum 1500 2>/dev/null || true
-
-    # Clear existing filters on root
-    $TC_BIN filter del dev "$AP_IFACE" parent 1: 2>/dev/null || true
-
-    local CLASS_ID=100
-    local ACTIVE_COUNT=0
-    while IFS='|' read -r mac rate || [ -n "$mac" ]; do
-        mac=$(echo "$mac" | tr '[:upper:]' '[:lower:]' | xargs)
-        rate=$(echo "$rate" | xargs)
-        if [ -n "$mac" ] && [ -n "$rate" ] && [ "$rate" -gt 0 ] 2>/dev/null; then
-            ip=$(grep -i "$mac" "$LEASES_FILE" 2>/dev/null | awk '{print $3}' | head -1)
-            if [ -n "$ip" ]; then
-                CLASS_ID=$((CLASS_ID + 1))
-                $TC_BIN class replace dev "$AP_IFACE" parent 1: classid "1:$CLASS_ID" htb rate "${rate}mbit" ceil "${rate}mbit" quantum 1500 2>/dev/null || true
-                $TC_BIN filter replace dev "$AP_IFACE" protocol ip parent 1: prio 1 u32 match ip dst "$ip/32" flowid "1:$CLASS_ID" 2>/dev/null || true
-                ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
-            fi
-        fi
-    done < "$LIMITS_FILE"
-
-    if [ "$ACTIVE_COUNT" -eq 0 ]; then
-        $TC_BIN qdisc del dev "$AP_IFACE" root 2>/dev/null || true
-    fi
-}
-
-if [ "$ACTION" = "list" ]; then
-    if [ -n "$IFACE" ]; then
-        MACS=$($IW_BIN dev "$IFACE" station dump 2>/dev/null | grep Station | awk '{print $2}')
-        for m in $MACS; do
-            if grep -q -i "$m" "$DENY_FILE" 2>/dev/null; then
-                continue
-            fi
-            LEASE_LINE=$(cat /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | grep -i "$m" | head -1)
-            IP=$(echo "$LEASE_LINE" | awk '{print $3}')
-            HOSTNAME=$(echo "$LEASE_LINE" | awk '{print $4}')
-            if [ -z "$HOSTNAME" ] || [ "$HOSTNAME" = "*" ]; then
-                HOSTNAME="Unknown Device"
-            fi
-            [ -z "$IP" ] && IP="Unknown IP"
-            RX=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk '/rx bytes:/{print $3}')
-            TX=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk '/tx bytes:/{print $3}')
-            BITRATE=$($IW_BIN dev "$IFACE" station get "$m" 2>/dev/null | awk -F':\t' '/tx bitrate:/{print $2}' | awk '{print $1" "$2}')
-            [ -z "$RX" ] && RX=0
-            [ -z "$TX" ] && TX=0
-            [ -z "$BITRATE" ] && BITRATE=""
-            echo "$m|$HOSTNAME|$RX|$TX|$BITRATE|$IP"
-        done
-    fi
-elif [ "$ACTION" = "set_limit" ]; then
-    RATE="$4"
-    LIMITS_FILE="/home/$USER_NAME/.config/wifi-hotspot-limits.conf"
-    mkdir -p "/home/$USER_NAME/.config"
-    touch "$LIMITS_FILE"
-    if [ -f "$LIMITS_FILE" ]; then
-        sed -i "/^$MAC|/Id" "$LIMITS_FILE"
-    fi
-    if [ -n "$RATE" ] && [ "$RATE" -gt 0 ] 2>/dev/null; then
-        echo "$MAC|$RATE" >> "$LIMITS_FILE"
-    fi
-    apply_traffic_limits "$USER_NAME"
-elif [ "$ACTION" = "get_limits" ]; then
-    LIMITS_FILE="/home/$USER_NAME/.config/wifi-hotspot-limits.conf"
-    if [ -f "$LIMITS_FILE" ]; then
-        cat "$LIMITS_FILE"
-    fi
-elif [ "$ACTION" = "apply_limits" ]; then
-    apply_traffic_limits "$USER_NAME"
-elif [ "$ACTION" = "block" ]; then
-    HOSTNAME="$4"
-    [ -z "$HOSTNAME" ] && HOSTNAME="Unknown Device"
-    mkdir -p "/home/$USER_NAME/.config"
-    touch "$DENY_FILE"
-    if ! grep -q -i "$MAC" "$DENY_FILE"; then
-        echo "$MAC|$HOSTNAME" >> "$DENY_FILE"
-    fi
-    HOSTAPD_DENY="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
-    awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
-    if [ -n "$CTRL_DIR" ]; then
-        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1 || true
-        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
-        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
-    fi
-    $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-        $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-    $IPTABLES_BIN -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-        $IPTABLES_BIN -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-
-    if [ -n "$IFACE" ]; then
-        $IW_BIN dev "$IFACE" station del "$MAC" 2>/dev/null || true
-    fi
-
-elif [ "$ACTION" = "unblock" ]; then
-    if [ -f "$DENY_FILE" ]; then
-        sed -i "/$MAC/Id" "$DENY_FILE"
-    fi
-    HOSTAPD_DENY="/home/$USER_NAME/.config/wifi-hotspot-hostapd.deny"
-    awk -F'|' '{print $1}' "$DENY_FILE" | grep -E '^[0-9a-fA-F:]+$' > "$HOSTAPD_DENY" 2>/dev/null || true
-    touch "$HOSTAPD_DENY"
-    if [ -n "$CTRL_DIR" ]; then
-        $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1 || true
-    fi
-
-    if [ -n "$MAC" ]; then
-        while $IPTABLES_BIN -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
-        while $IPTABLES_BIN -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
-    fi
-elif [ "$ACTION" = "list_blocked" ]; then
-    if [ -f "$DENY_FILE" ]; then
-        cat "$DENY_FILE"
-    fi
-fi
-EOF_MANAGE
-sudo chmod +x /usr/local/bin/manage_hotspot_clients
-
-# hostapd_action.sh
-sudo tee /usr/local/bin/hostapd_action.sh > /dev/null <<\EOF_ACTION
-#!/bin/bash
-IFACE=$1
-EVENT=$2
-MAC=$3
-
-IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
-IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
-HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
-
-if [ "$EVENT" = "AP-STA-CONNECTED" ]; then
-    ACTIVE_USER=$(cat /tmp/wifi-hotspot-active-user 2>/dev/null)
-    if [ -n "$ACTIVE_USER" ]; then
-        DENY_FILE="/home/$ACTIVE_USER/.config/wifi-hotspot.deny"
-        if [ -f "$DENY_FILE" ] && grep -q -i "$MAC" "$DENY_FILE"; then
-            CTRL_DIR=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
-            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
-            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
-            $IW_BIN dev "$IFACE" station del "$MAC" 2>/dev/null || true
-            $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
-                $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
-        else
-            /usr/local/bin/manage_hotspot_clients apply_limits "" "$ACTIVE_USER" >/dev/null 2>&1 || true
-        fi
-    fi
-fi
-EOF_ACTION
-sudo chmod +x /usr/local/bin/hostapd_action.sh
-
-echo "[+] Helper scripts installed."
-
-echo -e "\n=== Phase 4: Installing systemd Service Template ==="
-sudo tee /etc/systemd/system/wifi-hotspot@.service > /dev/null <<\EOF_SERVICE
-[Unit]
-Description=Wi-Fi Hotspot Service for %i
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/start_hotspot %i
-ExecStartPost=/bin/bash -c 'for i in $(seq 1 20); do CTRL=$(ls -d /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1); [ -n "$CTRL" ] && break; sleep 0.5; done; /usr/bin/ip link set dev ap0 txqueuelen 5000 2>/dev/null || true; /usr/local/bin/manage_hotspot_clients apply_limits "" %i 2>/dev/null || true; [ -n "$CTRL" ] && hostapd_cli -p "$CTRL" -B -a /usr/local/bin/hostapd_action.sh || true'
-ExecStop=/usr/local/bin/stop_hotspot %i
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF_SERVICE
+sudo python3 "$SOURCE_DIR/scripts/patch_create_ap.py" "$CREATE_AP_PATH"
+
+echo "=== Phase 4: Installing Backend Binaries ==="
+sudo install -d -m 755 /usr/local/bin
+sudo install -m 755 "$SOURCE_DIR/bin/start_hotspot" /usr/local/bin/start_hotspot
+sudo install -m 755 "$SOURCE_DIR/bin/start_hotspot_post" /usr/local/bin/start_hotspot_post
+sudo install -m 755 "$SOURCE_DIR/bin/stop_hotspot" /usr/local/bin/stop_hotspot
+sudo install -m 755 "$SOURCE_DIR/bin/manage_hotspot_clients" /usr/local/bin/manage_hotspot_clients
+
+echo "=== Phase 5: Installing systemd Service ==="
+sudo install -d -m 755 /etc/systemd/system
+sudo install -m 644 "$SOURCE_DIR/systemd/wifi-hotspot@.service" /etc/systemd/system/wifi-hotspot@.service
 sudo systemctl daemon-reload
-echo "[+] systemd service template installed."
 
-echo -e "\n=== Phase 5: Installing Dual Polkit Authorization Rules ==="
-# Modern JavaScript Polkit (polkit >= 0.106: Ubuntu 23+, Debian 12+, Fedora, Arch)
+echo "=== Phase 6: Installing Polkit Authorization ==="
 if [ -d "/etc/polkit-1/rules.d" ]; then
-    sudo tee /etc/polkit-1/rules.d/99-wifi-hotspot.rules > /dev/null <<\EOF_RULES
-polkit.addRule(function(action, subject, context) {
-    if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") && action.lookup("unit").match(/^wifi-hotspot@.*\.service$/)) {
-        return polkit.Result.YES;
-    }
-});
-EOF_RULES
-    echo "[+] Modern Polkit rule installed."
+    sudo install -m 644 "$SOURCE_DIR/polkit/99-wifi-hotspot.rules" /etc/polkit-1/rules.d/99-wifi-hotspot.rules
 fi
+sudo install -d -m 755 /usr/share/polkit-1/actions
+sudo install -m 644 "$SOURCE_DIR/polkit/org.gnome.shell.extensions.wifi-hotspot.policy" /usr/share/polkit-1/actions/org.gnome.shell.extensions.wifi-hotspot.policy
 
-# Legacy Keyfile Polkit (polkit < 0.106: Ubuntu 20.04/22.04, Debian 10/11, CentOS 7/8)
-if [ -d "/etc/polkit-1/localauthority/50-local.d" ]; then
-    sudo tee /etc/polkit-1/localauthority/50-local.d/99-wifi-hotspot.pkla > /dev/null <<\EOF_PKLA
-[Allow Hotspot Service Management]
-Identity=unix-user:*
-Action=org.freedesktop.systemd1.manage-units
-ResultAny=yes
-ResultInactive=yes
-ResultActive=yes
-EOF_PKLA
-    echo "[+] Legacy Polkit pkla rule installed."
-fi
-
-echo -e "\n=== Phase 5.5: Installing Sudoers Rule for manage_hotspot_clients ==="
-# Install Polkit action policy for manage_hotspot_clients (replaces sudoers approach)
-echo "[+] Installing Polkit policy for manage_hotspot_clients..."
-sudo tee /usr/share/polkit-1/actions/org.gnome.shell.extensions.wifi-hotspot.policy > /dev/null <<\EOF_POLKIT_POLICY
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
-<policyconfig>
-  <action id="org.gnome.shell.extensions.wifi-hotspot.manage">
-    <description>Manage Wi-Fi Hotspot Clients</description>
-    <message>Authentication is required to manage hotspot clients</message>
-    <defaults>
-      <allow_any>yes</allow_any>
-      <allow_inactive>yes</allow_inactive>
-      <allow_active>yes</allow_active>
-    </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/manage_hotspot_clients</annotate>
-    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
-  </action>
-</policyconfig>
-EOF_POLKIT_POLICY
-# Remove legacy sudoers file if it exists
-sudo rm -f /etc/sudoers.d/wifi-hotspot 2>/dev/null || true
-
-echo -e "\n=== Phase 6: Unmanaging Virtual Interfaces in NetworkManager ==="
+echo "=== Phase 7: Configuring NetworkManager ==="
+sudo install -d -m 755 /etc/NetworkManager/conf.d
 sudo tee /etc/NetworkManager/conf.d/99-wifi-hotspot-unmanage.conf > /dev/null <<\EOF_NM
 [keyfile]
 unmanaged-devices=interface-name:*_ap;interface-name:ap0;interface-name:ap1;interface-name:vmnet*
 EOF_NM
-
-# Ensure no conflicting udev cleanup rule interferes with interface creation
 sudo rm -f /etc/udev/rules.d/99-wifi-hotspot-cleanup.rules 2>/dev/null || true
-sudo udevadm control --reload-rules 2>/dev/null || true
-
 sudo systemctl reload NetworkManager 2>/dev/null || sudo systemctl restart NetworkManager 2>/dev/null || true
-echo "[+] NetworkManager unmanaged configuration installed."
 
-echo -e "\n=== Phase 7: Deploying GNOME Extension ==="
+echo "=== Phase 8: Deploying GNOME Extension ==="
 mkdir -p "$REAL_HOME/.local/share/gnome-shell/extensions"
-if [ -L "$TARGET_DIR" ] || [ -d "$TARGET_DIR" ]; then
-    rm -rf "$TARGET_DIR"
-fi
-ln -s "$SOURCE_DIR" "$TARGET_DIR"
-echo "[+] Symlink successfully pointing to development workspace directory."
+rm -rf "$TARGET_DIR"
 
-echo -e "\n=== Phase 8: Initialization ==="
+if [ "$1" = "--link" ] || [ "$1" = "--dev" ]; then
+    ln -s "$SOURCE_DIR" "$TARGET_DIR"
+    [ -n "$SUDO_USER" ] && chown -h "$USER_NAME:$USER_NAME" "$TARGET_DIR" 2>/dev/null || true
+    echo "Extension symlinked to $TARGET_DIR (development mode)."
+else
+    mkdir -p "$TARGET_DIR"
+    cp "$SOURCE_DIR/metadata.json" "$TARGET_DIR/"
+    cp "$SOURCE_DIR/extension.js" "$TARGET_DIR/"
+    cp "$SOURCE_DIR/prefs.js" "$TARGET_DIR/"
+    cp "$SOURCE_DIR/stylesheet.css" "$TARGET_DIR/"
+    cp -r "$SOURCE_DIR/schemas" "$TARGET_DIR/"
+    [ -n "$SUDO_USER" ] && chown -R "$USER_NAME:$USER_NAME" "$TARGET_DIR" 2>/dev/null || true
+    echo "Extension installed to $TARGET_DIR."
+fi
+
+echo "=== Phase 9: Default Configuration ==="
 CONFIG_DEST="$REAL_HOME/.config/wifi-hotspot.conf"
 if [ ! -f "$CONFIG_DEST" ]; then
-    echo "[+] Creating default config at $CONFIG_DEST..."
+    mkdir -p "$REAL_HOME/.config"
     cat <<\EOF_CONF > "$CONFIG_DEST"
 SSID="hotspot"
-USE_PASSWORD="true"
-PASSWORD="12345678"
-MAX_CLIENTS="10"
-BAND="a"
+PASSWORD="hotspotpassword"
+BAND="bg"
+BLOCK_ADS="false"
+INHIBIT_SLEEP="true"
 EOF_CONF
     chmod 600 "$CONFIG_DEST"
+    [ -n "$SUDO_USER" ] && chown "$USER_NAME:$USER_NAME" "$CONFIG_DEST" 2>/dev/null || true
 fi
 
-echo -e "\n=== Phase 9: Activation Guidelines ==="
-echo "Installation completed successfully."
-echo "Enable the extension with:"
+echo "Installation complete."
+echo "Enable extension with:"
 echo "    gnome-extensions enable $UUID"
-echo "=========================================================="

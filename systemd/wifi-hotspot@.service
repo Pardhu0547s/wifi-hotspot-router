@@ -1,0 +1,20 @@
+[Unit]
+Description=Wi-Fi Hotspot Service for %i
+After=network.target network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=3
+
+[Service]
+Type=simple
+RuntimeDirectory=wifi-hotspot
+ExecStart=/usr/local/bin/start_hotspot %i
+ExecStartPost=/usr/local/bin/start_hotspot_post %i
+ExecStop=/usr/local/bin/stop_hotspot %i
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

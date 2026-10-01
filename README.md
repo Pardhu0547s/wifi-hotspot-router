@@ -1,52 +1,49 @@
 # Wi-Fi Hotspot Router (GNOME Shell Extension)
 
-A GNOME Shell Quick Settings toggle to run a simultaneous Wi-Fi hotspot in Linux without losing your active internet/Wi-Fi connection.
+A high-performance GNOME Shell Quick Settings extension that allows simultaneous Wi-Fi hotspot sharing (AP + STA repeater mode) in Linux without disconnecting from your active internet connection.
 
 ![GNOME Quick Settings Menu](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot.png)
 ![Hotspot Preferences Configuration](https://github.com/Pardhu0547s/wifi-hotspot-router/raw/main/screenshot-menu.png)
 
 ## 📡 The Problem & Solution
-Standard NetworkManager configurations typically treat your wireless interface as either a client (connecting to the internet) or an Access Point (broadcasting a hotspot). Toggling one disables the other.
+Standard NetworkManager configurations typically treat a wireless interface as either a client (connecting to upstream internet) or an Access Point (broadcasting a hotspot). Toggling one disables the other.
 
-This extension resolves this by executing `create_ap` (which creates a virtual interface `ap0` under the hood) on the exact same frequency channel as your primary internet interface.
+This extension solves this by creating a dedicated virtual AP interface (`ap0`) with a locally administered MAC address on the exact same frequency channel as your primary Wi-Fi connection.
 
-To avoid interactive password prompts, `setup.sh` deploys a passwordless systemd service template with Polkit authorization for hotspot start/stop, and a narrowly scoped sudoers rule for client management. This gives you a smooth, zero-friction toggle switch directly in your panel. See the [Security Architecture](#-security-architecture) section below for full details.
+To avoid interactive password prompts while adhering to the principle of least privilege, `setup.sh` deploys a native systemd service template with scoped Polkit authorization rules for start/stop actions and a dedicated Polkit action policy for client management.
+
+---
+
+## 🚀 Key Features
+- **Concurrent Wi-Fi Repeater Mode**: Share Wi-Fi while staying connected to Wi-Fi on a single physical adapter.
+- **Dynamic Spectrum Management**: Automatically calculates optimal High-Throughput (HT40+ vs HT40-) and Very High-Throughput (VHT80) capabilities across 2.4GHz and 5GHz channels to prevent hostapd initialization failures and maximize wireless speeds.
+- **Advanced Security & Filtering**: Standard WPA2-PSK encryption, network-wide AdGuard ad & tracker blocking, and system sleep inhibition.
 
 ---
 
 ## 🛠️ Installation
 
 ### 1. Prerequisites
-The extension relies on `linux-wifi-hotspot` (`create_ap`). Install it along with necessary system dependencies:
+Install `linux-wifi-hotspot` (`create_ap`) along with required dependencies:
 
-**Fedora (Streamlined via curl)**
+**Fedora**
 ```bash
-sudo dnf install -y glib2-devel gtk3-devel pkgconf-pkg-config qrencode-devel qrencode hostapd dnsmasq iw haveged iptables procps-ng iproute util-linux
-sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
-sudo chmod +x /usr/bin/create_ap
+sudo dnf install -y glib2-devel qrencode hostapd dnsmasq iw iptables procps-ng iproute polkit
+sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/local/bin/create_ap
+sudo chmod +x /usr/local/bin/create_ap
 ```
 
-**Ubuntu / Debian (Method 1: Streamlined via curl)**
+**Ubuntu / Debian**
 ```bash
 sudo apt update
-sudo apt install -y hostapd dnsmasq iw haveged iptables procps iproute2 qrencode
-sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/bin/create_ap
-sudo chmod +x /usr/bin/create_ap
-```
-
-**Ubuntu / Debian (Method 2: Manual Build)**
-```bash
-sudo apt install -y libgtk-3-dev build-essential gcc g++ pkg-config make hostapd libqrencode-dev libpng-dev
-git clone https://github.com/lakinduakash/linux-wifi-hotspot
-cd linux-wifi-hotspot
-make
-sudo make install
-cd ..
+sudo apt install -y hostapd dnsmasq iw iptables procps iproute2 qrencode pkexec polkitd libglib2.0-bin
+sudo curl -L https://raw.githubusercontent.com/lakinduakash/linux-wifi-hotspot/master/src/scripts/create_ap -o /usr/local/bin/create_ap
+sudo chmod +x /usr/local/bin/create_ap
 ```
 
 **Arch Linux**
 ```bash
-sudo pacman -S gtk3 pkgconf qrencode linux-wifi-hotspot
+sudo pacman -S qrencode hostapd dnsmasq iw iptables iproute2 polkit linux-wifi-hotspot
 ```
 
 ### 2. Running Setup
@@ -60,104 +57,53 @@ chmod +x setup.sh
 ```
 
 The script will:
-- Compile GSettings schemas locally.
-- Restore and securely patch `/usr/bin/create_ap` to support connected client limits.
-- Install `/usr/local/bin/start_hotspot` and `/usr/local/bin/stop_hotspot`.
-- Deploy the systemd service template `/etc/systemd/system/wifi-hotspot@.service`.
-- Install custom Polkit rules `/etc/polkit-1/rules.d/99-wifi-hotspot.rules` to authorize starts and stops without password prompts.
-- Deploy the extension symlink to your GNOME Shell extensions directory.
+1. Validate required tools across package managers.
+2. Compile GSettings schemas.
+3. Patch `create_ap` for client limits, 5GHz IR-concurrent AP, and WPA3 support.
+4. Install engine binaries into `/usr/local/bin/` (`start_hotspot`, `start_hotspot_post`, `stop_hotspot`, `manage_hotspot_clients`).
+5. Install the systemd service template `/etc/systemd/system/wifi-hotspot@.service`.
+6. Install scoped Polkit authorization rules and action policies.
+7. Configure NetworkManager to ignore virtual AP interfaces (`ap0`, `ap1`, `*_ap`).
+8. Symlink the extension into `~/.local/share/gnome-shell/extensions/`.
+
+Alternatively, use the Makefile:
+```bash
+make build
+sudo make install-system
+make install-user
+```
 
 ### 3. Activating
-1. **Restart GNOME Shell**: Since Fedora uses Wayland by default, log out of your session and log back in.
+1. **Log out and log back in** (or restart GNOME Shell) to load new extension schemas.
 2. **Enable the Extension**:
    ```bash
    gnome-extensions enable wifi-hotspot-router@pardhu0547s.github.com
    ```
-3. Open GNOME **Extensions** or GNOME **Extension Manager**, click the gear icon (⚙️) next to the extension, and configure your settings!
+3. Open GNOME **Extension Manager** or **Extensions**, click the Settings icon next to **Wi-Fi Hotspot Router**, and configure your network credentials.
 
 ---
 
 ## ⚙️ Configuration Options
-You can open the settings panel to configure:
-- **SSID (Hotspot Name)**: Network name (defaults to `hotspot`).
-- **Security Mode**: Enable or disable WPA2 password protection.
-- **Passphrase**: Set a WPA2 password (stored securely in `~/.config/wifi-hotspot.conf` with `600` permissions).
-- **Max Connected Devices**: Limit the number of clients that can connect.
+- **Hotspot Name (SSID)**: Network name (1-32 characters).
+- **Passphrase**: Minimum 8 characters, secured with standard WPA2-PSK (`0600` owner-only permissions).
+- **Wired / Ethernet Hotspot Band**: 2.4 GHz (Long Range) or 5 GHz (High Speed) when broadcasting from a wired connection or offline. (When repeating Wi-Fi, the band automatically mirrors your Wi-Fi channel).
+- **Block Ads & Trackers**: Filter advertisements, trackers, and malicious domains on all connected devices via AdGuard DNS.
+- **Prevent System Sleep**: Inhibit laptop suspend while devices are connected.
 
 ---
 
 ## 🔒 Security Architecture
 
-GNOME Extensions run inside the GNOME Shell process, which operates as an unprivileged user. However, managing a Wi-Fi hotspot requires root-level access to networking subsystems. This extension solves the privilege gap using **three independent, narrowly scoped mechanisms** — none of which require embedding `sudo` inside the JavaScript extension layer.
-
-### Why Root Access Is Needed
-
-| Operation | Underlying Tool | Why Root Is Required |
+| Operation | Mechanism | Security Guarantee |
 |---|---|---|
-| Starting/stopping the hotspot | `create_ap`, `hostapd`, `dnsmasq` | Creating virtual wireless interfaces (`ap0`), configuring `hostapd` for AP mode, and running a DHCP server all require `CAP_NET_ADMIN` privileges |
-| Blocking/unblocking clients | `iptables`, `hostapd_cli`, `iw` | Inserting firewall rules (`iptables -I FORWARD -m mac --mac-source ... -j DROP`) and issuing `hostapd_cli disassociate` commands require root |
-| Listing connected devices | `iw dev <iface> station dump` | Querying the kernel's wireless station table requires `CAP_NET_ADMIN` |
-
-### How Privilege Escalation Works
-
-The extension **never** runs arbitrary commands as root. Instead, `setup.sh` installs three tightly controlled privilege pathways:
-
-#### 1. Systemd Service Template (Start/Stop Hotspot)
-A parameterized systemd unit (`wifi-hotspot@.service`) is installed at `/etc/systemd/system/`. The extension calls `systemctl start wifi-hotspot@<username>.service` to toggle the hotspot. The service unit executes only the pre-installed `/usr/local/bin/start_hotspot` script — nothing else.
-
-```
-extension.js → systemctl start/stop → systemd → /usr/local/bin/start_hotspot
-```
-
-#### 2. Polkit Rules (Passwordless systemctl)
-A custom Polkit rule is installed at `/etc/polkit-1/rules.d/99-wifi-hotspot.rules`. This rule authorizes **only** the `wifi-hotspot@.service` unit to be started and stopped by active local users without a password prompt. It does not grant blanket `systemctl` access.
-
-```javascript
-// Polkit rule (installed by setup.sh)
-polkit.addRule(function(action, subject) {
-    if (action.id === "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit").indexOf("wifi-hotspot@") === 0 &&
-        subject.isInGroup("users") && subject.local && subject.active) {
-        return polkit.Result.YES;
-    }
-});
-```
-
-#### 3. Polkit Policy (Client Management)
-A Polkit action policy is installed at `/usr/share/polkit-1/actions/org.gnome.shell.extensions.wifi-hotspot.policy`. It authorizes **passwordless execution of exactly one binary** — `/usr/local/bin/manage_hotspot_clients` — and nothing else. This script is a fixed, pre-installed shell script (not user-modifiable at runtime) that handles listing connected devices, blocking MACs, and unblocking MACs.
-
-```xml
-<!-- Installed by setup.sh -->
-<action id="org.gnome.shell.extensions.wifi-hotspot.manage">
-  <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/manage_hotspot_clients</annotate>
-</action>
-```
-
-The extension invokes it as:
-```
-extension.js → pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients <action> <mac> <username>
-```
-
-### What the Extension JavaScript Actually Executes
-
-| Action | Command | Privilege Source |
-|---|---|---|
-| Toggle hotspot ON | `systemctl start wifi-hotspot@<user>.service` | Polkit rule |
-| Toggle hotspot OFF | `systemctl stop wifi-hotspot@<user>.service` | Polkit rule |
-| List connected devices | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients list "" <user>` | Polkit Policy |
-| Block a device | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients block <mac> <user>` | Polkit Policy |
-| Unblock a device | `pkexec --disable-internal-agent /usr/local/bin/manage_hotspot_clients unblock <mac> <user>` | Polkit Policy |
-| Check hotspot status | `systemctl is-active wifi-hotspot@<user>.service` | No privilege needed |
-
-### Security Guarantees
-
-- **No arbitrary command execution**: The extension can only call `systemctl` (gated by Polkit rule) and one fixed script (gated by Polkit policy).
-- **No secrets in GSettings**: The Wi-Fi password is stored in `~/.config/wifi-hotspot.conf` with `chmod 600` (owner-only read/write), never in the dconf database.
-- **No network downloads**: The extension does not fetch any external resources at runtime.
-- **Full cleanup on disable**: The `disable()` method destroys all UI elements and removes all GLib timeout sources, leaving the shell in its original state.
+| Hotspot Start/Stop | `systemctl` + Polkit rule (`99-wifi-hotspot.rules`) | Authorizes only active local users to manage their own `wifi-hotspot@<username>.service`. No root passwords or blanket permissions. |
+| Status Querying | System D-Bus `ListUnitsByNames` | Non-blocking, atomic status verification without spawning subprocesses or generating journal errors. |
+| Client Management | `pkexec` + Polkit policy (`org.gnome.shell.extensions.wifi-hotspot.policy`) | Authorizes execution of `/usr/local/bin/manage_hotspot_clients`. Verifies caller UID against target account to prevent user spoofing. |
+| Configuration Storage | Declarative parser (`~/.config/wifi-hotspot.conf`) | Root engine never sources user files directly, preventing arbitrary code injection. File secured with mode `0600`. |
+| Input Sanitization | Regular expressions | All MAC addresses validated against `^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`. SSIDs and parameters sanitized before execution. |
 
 ---
 
 ## 👥 Authors & Contribution
-- Created by [Pardhu0547s](https://github.com/Pardhu0547s)
-- Feel free to open issues or submit pull requests!
+- Created and maintained by [Pardhu0547s](https://github.com/Pardhu0547s)
+- Issues and pull requests are welcome!

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+  <vendor>Wi-Fi Hotspot Router</vendor>
+  <vendor_url>https://github.com/Pardhu0547s/wifi-hotspot-router</vendor_url>
+
+  <action id="org.gnome.shell.extensions.wifi-hotspot.manage">
+    <description>Manage Wi-Fi Hotspot Clients</description>
+    <message>Authentication is required to manage hotspot clients and network filters</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/manage_hotspot_clients</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

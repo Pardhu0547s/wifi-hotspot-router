@@ -1,0 +1,507 @@
+#!/bin/bash
+# Wi-Fi Hotspot Router - Service Launcher
+# Executes create_ap under systemd (wifi-hotspot@.service) with dynamic interface configuration.
+
+set -o pipefail
+trap 'exit 0' SIGTERM SIGINT
+
+USER_NAME="$1"
+if [ -z "$USER_NAME" ]; then
+    echo "Error: Username parameter required." >&2
+    exit 1
+fi
+
+if ! [[ "$USER_NAME" =~ ^[a-zA-Z0-9_.][a-zA-Z0-9_.-]*\$?$ ]]; then
+    echo "Error: Invalid username format: $USER_NAME" >&2
+    exit 1
+fi
+
+USER_HOME=$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6)
+if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+    echo "Error: Home directory for $USER_NAME not found." >&2
+    exit 1
+fi
+
+CONFIG_FILE="$USER_HOME/.config/wifi-hotspot.conf"
+
+# Configuration defaults
+SSID="hotspot"
+PASSWORD="hotspotpassword"
+MAX_CLIENTS="10"
+BAND="bg"
+BLOCK_ADS="false"
+INHIBIT_SLEEP="true"
+
+# Parse user configuration file safely without eval/source
+if [ -f "$CONFIG_FILE" ]; then
+    while IFS='=' read -r key val || [ -n "$key" ]; do
+        key=$(echo "$key" | tr -d ' \t\r\n')
+        val=$(echo "$val" | sed -e 's/^[ \t]*"//' -e 's/"[ \t\r\n]*$//')
+        case "$key" in
+            SSID)
+                clean_ssid=$(echo "$val" | tr -cd '[:alnum:] _.-' | head -c 32)
+                [ -n "$clean_ssid" ] && SSID="$clean_ssid"
+                ;;
+            PASSWORD)
+                clean_pass=$(echo "$val" | tr -d '"`\\\r\n' | head -c 63)
+                [ -n "$clean_pass" ] && PASSWORD="$clean_pass"
+                ;;
+            BAND)
+                case "$val" in
+                    a|5G|5GHz) BAND="a" ;;
+                    *) BAND="bg" ;;
+                esac
+                ;;
+            BLOCK_ADS)
+                [ "$val" = "true" ] && BLOCK_ADS="true" || BLOCK_ADS="false"
+                ;;
+            DNS_PROFILE)
+                [ "$val" = "adguard" ] && BLOCK_ADS="true"
+                ;;
+            INHIBIT_SLEEP)
+                [ "$val" = "true" ] && INHIBIT_SLEEP="true" || INHIBIT_SLEEP="false"
+                ;;
+        esac
+    done < "$CONFIG_FILE"
+fi
+
+IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
+IP_BIN=$(command -v ip || echo "/usr/bin/ip")
+NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
+SYSCTL_BIN=$(command -v sysctl || echo "/usr/sbin/sysctl")
+IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
+SYSTEMCTL_BIN=$(command -v systemctl || echo "/usr/bin/systemctl")
+CREATE_AP_BIN=$(command -v create_ap || echo "/usr/local/bin/create_ap")
+[ ! -x "$CREATE_AP_BIN" ] && CREATE_AP_BIN="/usr/bin/create_ap"
+
+# Detect physical wireless interfaces
+mapfile -t WIFI_INTERFACES < <($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]' | grep -v '^p2p-dev-')
+
+if [ ${#WIFI_INTERFACES[@]} -eq 0 ]; then
+    echo "Error: No physical Wi-Fi interface detected." >&2
+    exit 1
+fi
+
+# Detect whether Wi-Fi is actively associated with an upstream network
+IS_WIFI_CONNECTED=0
+ACTIVE_WIFI_IFACE=""
+for w in "${WIFI_INTERFACES[@]}"; do
+    if $IW_BIN dev "$w" link 2>/dev/null | grep -q "^Connected to" || \
+       ($NMCLI_BIN -t -f DEVICE,STATE dev 2>/dev/null | grep -E "^$w:connected" >/dev/null 2>&1); then
+        IS_WIFI_CONNECTED=1
+        ACTIVE_WIFI_IFACE="$w"
+        break
+    fi
+done
+
+# Detect default upstream gateway and interface
+DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
+DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
+
+IS_LAN_CONNECTED=0
+if [ -n "$DEFAULT_IFACE" ]; then
+    IS_LAN_CONNECTED=1
+    for w in "${WIFI_INTERFACES[@]}"; do
+        if [ "$w" = "$DEFAULT_IFACE" ]; then
+            IS_LAN_CONNECTED=0
+            break
+        fi
+    done
+fi
+
+# When wired Ethernet is active, disconnect Wi-Fi client to avoid competing connections
+if [ "$IS_LAN_CONNECTED" -eq 1 ]; then
+    for w in "${WIFI_INTERFACES[@]}"; do
+        $NMCLI_BIN dev disconnect "$w" 2>/dev/null || true
+        $NMCLI_BIN dev set "$w" managed no 2>/dev/null || true
+    done
+    IS_WIFI_CONNECTED=0
+    ACTIVE_WIFI_IFACE=""
+fi
+
+# Clean up stale virtual interfaces and previous temporary files
+rm -rf /tmp/create_ap.* 2>/dev/null || true
+for w in "${WIFI_INTERFACES[@]}"; do
+    if [ "$IS_WIFI_CONNECTED" -eq 0 ]; then
+        $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
+    fi
+    $IW_BIN dev "${w}_ap" del 2>/dev/null || true
+done
+$IW_BIN dev ap0 del 2>/dev/null || true
+
+# Firewall rules for ap0 interface
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
+    ufw allow in on ap0 2>/dev/null || true
+    ufw route allow in on ap0 2>/dev/null || true
+fi
+
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qw "running"; then
+    firewall-cmd --zone=trusted --add-interface=ap0 2>/dev/null || true
+fi
+
+# Enable kernel packet forwarding and loose reverse path filtering for asymmetric routes
+$SYSCTL_BIN -w net.ipv4.ip_forward=1 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.conf.all.rp_filter=2 2>/dev/null || true
+$SYSCTL_BIN -w net.ipv4.conf.default.rp_filter=2 2>/dev/null || true
+
+# Disable wireless power saving to prevent packet drop and latency spikes
+for w in "${WIFI_INTERFACES[@]}"; do
+    $IW_BIN dev "$w" set power_save off 2>/dev/null || true
+done
+
+# Clamp TCP MSS to Path MTU to prevent packet fragmentation over tunnel/cellular uplinks
+$IPTABLES_BIN -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    $IPTABLES_BIN -t mangle -I FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+$IPTABLES_BIN -t mangle -C POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+    $IPTABLES_BIN -t mangle -I POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+
+# Station limits and MAC blacklist configuration
+if [ "$MAX_CLIENTS" -ne "0" ] 2>/dev/null; then
+    export MAX_NUM_STA="$MAX_CLIENTS"
+else
+    unset MAX_NUM_STA
+fi
+
+UI_DENY_FILE="$USER_HOME/.config/wifi-hotspot.deny"
+mkdir -p "$USER_HOME/.config"
+touch "$UI_DENY_FILE"
+export DENY_MAC_FILE="$USER_HOME/.config/wifi-hotspot-hostapd.deny"
+awk -F'|' '{print $1}' "$UI_DENY_FILE" 2>/dev/null | grep -E '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$' > "$DENY_MAC_FILE" 2>/dev/null || true
+touch "$DENY_MAC_FILE"
+
+while IFS= read -r blocked_mac; do
+    if [[ "$blocked_mac" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+        $IPTABLES_BIN -C FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || \
+            $IPTABLES_BIN -I FORWARD -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
+        $IPTABLES_BIN -C INPUT -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || \
+            $IPTABLES_BIN -I INPUT -m mac --mac-source "$blocked_mac" -j DROP 2>/dev/null || true
+    fi
+done < "$DENY_MAC_FILE"
+
+# Query or detect regulatory domain
+CURRENT_REG=$($IW_BIN reg get 2>/dev/null | awk '/country/{print $2}' | tr -d ':' | head -n 1)
+if [ "$CURRENT_REG" = "00" ] || [ -z "$CURRENT_REG" ]; then
+    LOCALE_COUNTRY=$(locale 2>/dev/null | grep -m1 LC_NAME | cut -d_ -f2 | cut -d. -f1 | cut -d@ -f1)
+    [ -z "$LOCALE_COUNTRY" ] && LOCALE_COUNTRY=$(locale 2>/dev/null | grep -m1 LANG | cut -d_ -f2 | cut -d. -f1 | cut -d@ -f1)
+    if [ ${#LOCALE_COUNTRY} -eq 2 ]; then
+        $IW_BIN reg set "$LOCALE_COUNTRY" 2>/dev/null || true
+        CURRENT_REG="$LOCALE_COUNTRY"
+    else
+        CURRENT_REG=""
+    fi
+fi
+
+CMD_ARGS=(--ieee80211n)
+if [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ]; then
+    CMD_ARGS+=(--country "$CURRENT_REG")
+fi
+MODE_LABEL="2.4G"
+
+# Resolve non-colliding IPv4 gateway for hotspot subnet
+get_safe_gateway() {
+    local routes
+    routes=$($IP_BIN -4 route show 2>/dev/null | awk '{print $1}')
+    local addrs
+    addrs=$($IP_BIN -4 addr show 2>/dev/null | awk '/inet /{print $2}')
+    local active="$routes $addrs"
+
+    local candidates=(
+        "192.168.199.1"
+        "192.168.224.1"
+        "192.168.49.1"
+        "10.42.0.1"
+        "192.168.12.1"
+        "172.24.0.1"
+    )
+
+    for gw in "${candidates[@]}"; do
+        local prefix="${gw%.*}"
+        if ! echo "$active" | grep -q -F "$prefix."; then
+            echo "$gw"
+            return 0
+        fi
+    done
+
+    for i in $(seq 100 240); do
+        if ! echo "$active" | grep -q -F "192.168.$i."; then
+            echo "192.168.$i.1"
+            return 0
+        fi
+    done
+
+    echo "192.168.199.1"
+}
+
+# Dynamic HT capabilities for 2.4GHz
+get_24g_ht_capab() {
+    local ch="$1"
+    if [ "$ch" -ge 8 ] 2>/dev/null; then
+        echo '[HT40-][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+    else
+        echo '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+    fi
+}
+
+# Dynamic HT capabilities for 5GHz
+get_5g_ht_capab() {
+    local ch="$1"
+    case "$ch" in
+        40|48|56|64|104|112|120|128|136|144|153|161)
+            echo '[HT40-][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+            ;;
+        165)
+            echo '[SHORT-GI-20][RX-STBC1][LDPC]'
+            ;;
+        *)
+            echo '[HT40+][SHORT-GI-20][SHORT-GI-40][RX-STBC1][LDPC]'
+            ;;
+    esac
+}
+
+VHT_CAPAB_OPTS='[SHORT-GI-80][MAX-A-MPDU-LEN-EXP7][RXLDPC][RX-STBC-1]'
+
+# Check 802.11ax (Wi-Fi 6) capability on first wireless device
+HAS_AX=0
+PHY_NAME=""
+if [ ${#WIFI_INTERFACES[@]} -gt 0 ]; then
+    PHY_NAME=$($IW_BIN dev "${WIFI_INTERFACES[0]}" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+    if [ -n "$PHY_NAME" ] && $IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -A 5 "HE Iftypes" | grep -qw "AP"; then
+        HAS_AX=1
+    fi
+fi
+
+# Reusable helper to create virtual interface ap0 with locally administered MAC address
+setup_virtual_ap_interface() {
+    local parent_iface="$1"
+    $IW_BIN dev "${parent_iface}_ap" del 2>/dev/null || true
+    $IW_BIN dev ap0 del 2>/dev/null || true
+    $IW_BIN dev "$parent_iface" interface add ap0 type __ap 2>/dev/null || true
+
+    local orig_mac
+    orig_mac=$(cat "/sys/class/net/$parent_iface/address" 2>/dev/null)
+    if [ -n "$orig_mac" ]; then
+        IFS=':' read -r -a mac_bytes <<< "$orig_mac"
+        local b0
+        b0=$(printf "%02x" $(( 16#${mac_bytes[0]} | 0x02 )))
+        local b5
+        b5=$(printf "%02x" $(( (16#${mac_bytes[5]} + 1) % 256 )))
+        local new_mac="${b0}:${mac_bytes[1]}:${mac_bytes[2]}:${mac_bytes[3]}:${mac_bytes[4]}:${b5}"
+        $IP_BIN link set dev ap0 address "$new_mac" 2>/dev/null || true
+    fi
+
+    $SYSCTL_BIN -w net.ipv4.conf.ap0.rp_filter=2 2>/dev/null || true
+    $SYSCTL_BIN -w net.ipv6.conf.ap0.disable_ipv6=1 2>/dev/null || true
+    $IW_BIN dev ap0 set power_save off 2>/dev/null || true
+}
+
+INTERNET_IFACE=""
+
+if [ "$IS_WIFI_CONNECTED" -eq 1 ]; then
+    # Concurrent Wi-Fi Repeater Mode (AP + STA)
+    INTERNET_IFACE="$DEFAULT_IFACE"
+    [ -z "$INTERNET_IFACE" ] && INTERNET_IFACE="$ACTIVE_WIFI_IFACE"
+
+    WIFI_IFACE="$ACTIVE_WIFI_IFACE"
+
+    CURRENT_CHAN=$($IW_BIN dev "$WIFI_IFACE" info 2>/dev/null | awk '/channel/{print $2}')
+    if [ -z "$CURRENT_CHAN" ]; then
+        CURRENT_CHAN=$($NMCLI_BIN -t -f active,chan dev wifi 2>/dev/null | grep '^yes:' | cut -d: -f2 | head -n 1)
+    fi
+    [ -z "$CURRENT_CHAN" ] && CURRENT_CHAN=6
+
+    setup_virtual_ap_interface "$WIFI_IFACE"
+    CMD_ARGS+=(--no-virt)
+    WIFI_IFACE="ap0"
+
+    if [ "$CURRENT_CHAN" -ge 36 ] 2>/dev/null; then
+        IS_CHAN_RESTRICTED=0
+        if [ -n "$PHY_NAME" ]; then
+            if $IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "MHz \[${CURRENT_CHAN}\]" | grep -q "no IR"; then
+                IS_CHAN_RESTRICTED=1
+            fi
+        fi
+
+        if [ "$IS_CHAN_RESTRICTED" -eq 1 ]; then
+            ERR_MSG="Your Wi-Fi card ($PHY_NAME) does not support 5GHz Hotspot mode (hardware NO-IR lock). Single-radio Wi-Fi repeating requires connecting to a 2.4GHz Wi-Fi network or using an Ethernet/USB uplink."
+            echo "Error: $ERR_MSG" >&2
+            echo "$ERR_MSG" > "$RUN_DIR/last-error" 2>/dev/null || true
+            $IW_BIN dev ap0 del 2>/dev/null || true
+            exit 1
+        elif [ "$CURRENT_CHAN" -ge 52 ] && [ "$CURRENT_CHAN" -le 144 ]; then
+            ERR_MSG="Active Wi-Fi is on 5GHz DFS radar channel $CURRENT_CHAN. Single-adapter Wi-Fi sharing cannot operate on radar frequencies. Please connect to a 2.4GHz Wi-Fi network or standard non-DFS channel."
+            echo "Error: $ERR_MSG" >&2
+            echo "$ERR_MSG" > "$RUN_DIR/last-error" 2>/dev/null || true
+            $IW_BIN dev ap0 del 2>/dev/null || true
+            exit 1
+        else
+            HT_CAPAB_5G=$(get_5g_ht_capab "$CURRENT_CHAN")
+            CMD_ARGS+=(--ieee80211ac -c "$CURRENT_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_5G" --vht_capab "$VHT_CAPAB_OPTS")
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="Repeater 5G"
+        fi
+    else
+        HT_CAPAB_24G=$(get_24g_ht_capab "$CURRENT_CHAN")
+        CMD_ARGS+=(-c "$CURRENT_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
+        MODE_LABEL="Repeater 2.4G"
+    fi
+
+elif [ -n "$DEFAULT_IFACE" ]; then
+    # Ethernet, Cellular, or USB Tethering connection
+    WIFI_IFACE="${WIFI_INTERFACES[0]}"
+    INTERNET_IFACE="$DEFAULT_IFACE"
+
+    $NMCLI_BIN dev disconnect "$WIFI_IFACE" 2>/dev/null || true
+    $NMCLI_BIN dev set "$WIFI_IFACE" managed no 2>/dev/null || true
+    sleep 0.5
+
+    # Determine least congested 2.4GHz channel via scan dump
+    BEST_CHAN=6
+    if command -v iw >/dev/null 2>&1; then
+        SCAN_RESULT=$($IW_BIN dev "$WIFI_IFACE" scan dump 2>/dev/null | grep -E 'DS Parameter set: channel' | awk '{print $NF}' | sort | uniq -c | sort -n)
+        for TEST_CHAN in 1 6 11; do
+            CHAN_COUNT=$(echo "$SCAN_RESULT" | grep " ${TEST_CHAN}$" | awk '{print $1}')
+            [ -z "$CHAN_COUNT" ] && CHAN_COUNT=0
+            if [ -z "$BEST_COUNT" ] || [ "$CHAN_COUNT" -lt "$BEST_COUNT" ]; then
+                BEST_COUNT="$CHAN_COUNT"
+                BEST_CHAN="$TEST_CHAN"
+            fi
+        done
+    fi
+
+    if [ "$BAND" = "a" ]; then
+        ALLOWED_5G_CHAN=""
+        if [ -n "$PHY_NAME" ]; then
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | grep -v "no IR" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+        fi
+        if [ -n "$ALLOWED_5G_CHAN" ]; then
+            HT_CAPAB_5G=$(get_5g_ht_capab "$ALLOWED_5G_CHAN")
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_5G" --vht_capab "$VHT_CAPAB_OPTS")
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="5G"
+        else
+            HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
+            CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
+            MODE_LABEL="2.4G (5G fallback)"
+        fi
+    else
+        HT_CAPAB_24G=$(get_24g_ht_capab "$BEST_CHAN")
+        CMD_ARGS+=(-c "$BEST_CHAN" --freq-band 2.4 --ht_capab "$HT_CAPAB_24G")
+        MODE_LABEL="2.4G"
+    fi
+
+else
+    # Standalone Local Hotspot (no external internet uplink)
+    REAL_WIFI="${WIFI_INTERFACES[0]}"
+    INTERNET_IFACE=""
+    CMD_ARGS+=(-n)
+
+    setup_virtual_ap_interface "$REAL_WIFI"
+    CMD_ARGS+=(--no-virt)
+    WIFI_IFACE="ap0"
+
+    if [ "$BAND" = "a" ]; then
+        ALLOWED_5G_CHAN=""
+        if [ -n "$PHY_NAME" ]; then
+            ALLOWED_5G_CHAN=$($IW_BIN phy "$PHY_NAME" info 2>/dev/null | grep -E "5[0-9]{3}\.0 MHz" | grep -v "disabled" | sed -n 's/.*\[\([0-9]\+\)\].*/\1/p' | head -n 1 || true)
+            [ -z "$ALLOWED_5G_CHAN" ] && ALLOWED_5G_CHAN="36"
+        fi
+        if [ -n "$ALLOWED_5G_CHAN" ]; then
+            HT_CAPAB_5G=$(get_5g_ht_capab "$ALLOWED_5G_CHAN")
+            CMD_ARGS+=(--ieee80211ac -c "$ALLOWED_5G_CHAN" --freq-band 5 --ht_capab "$HT_CAPAB_5G" --vht_capab "$VHT_CAPAB_OPTS")
+            [ "$HAS_AX" -eq 1 ] && CMD_ARGS+=(--ieee80211ax)
+            MODE_LABEL="5G"
+        else
+            CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
+            MODE_LABEL="2.4G (5G fallback)"
+        fi
+    else
+        CMD_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
+        MODE_LABEL="2.4G"
+    fi
+fi
+
+# Write runtime indicators
+RUN_DIR="/run/wifi-hotspot"
+mkdir -p "$RUN_DIR"
+chmod 755 "$RUN_DIR"
+echo "$MODE_LABEL" > "$RUN_DIR/active-mode" 2>/dev/null || true
+echo "$USER_NAME" > "$RUN_DIR/active-user" 2>/dev/null || true
+
+# Append DNS and encryption arguments
+append_security_and_dns_args() {
+    local -n arr=$1
+    if [ "$BLOCK_ADS" = "true" ]; then
+        arr+=(--dhcp-dns "94.140.14.14,94.140.15.15")
+    fi
+    arr+=(-w 2)
+}
+
+SAFE_GATEWAY=$(get_safe_gateway)
+echo "$SAFE_GATEWAY" > "$RUN_DIR/active-gateway" 2>/dev/null || true
+CMD_ARGS+=(-g "$SAFE_GATEWAY")
+
+append_security_and_dns_args CMD_ARGS
+
+if [ -n "$INTERNET_IFACE" ]; then
+    $SYSCTL_BIN -w "net.ipv4.conf.$INTERNET_IFACE.forwarding=1" 2>/dev/null || true
+    $SYSCTL_BIN -w "net.ipv4.conf.$INTERNET_IFACE.rp_filter=2" 2>/dev/null || true
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
+        ufw route allow in on ap0 out on "$INTERNET_IFACE" 2>/dev/null || true
+        ufw route allow in on "$INTERNET_IFACE" out on ap0 2>/dev/null || true
+    fi
+fi
+
+if [ -n "$INTERNET_IFACE" ]; then
+    CMD_ARGS+=("$WIFI_IFACE" "$INTERNET_IFACE" "$SSID")
+else
+    CMD_ARGS+=("$WIFI_IFACE" "$SSID")
+fi
+
+if [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
+    CMD_ARGS+=("$PASSWORD")
+fi
+
+INHIBIT_WRAPPER=()
+if [ "$INHIBIT_SLEEP" = "true" ] && command -v systemd-inhibit >/dev/null 2>&1; then
+    INHIBIT_WRAPPER=(systemd-inhibit --what=idle:sleep:handle-lid-switch --who="Wi-Fi Hotspot Router" --why="Hotspot is sharing network connection")
+fi
+
+"${INHIBIT_WRAPPER[@]}" $CREATE_AP_BIN "${CMD_ARGS[@]}"
+EXIT_CODE=$?
+
+# Automatic cleanup on failure; only fallback if independent wired uplink exists
+if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 130 ] && [ $EXIT_CODE -ne 143 ] && [ $EXIT_CODE -ne 255 ]; then
+    echo "Warning: Hotspot terminated with code $EXIT_CODE. Cleaning up..." >&2
+    $IW_BIN dev ap0 del 2>/dev/null || true
+    for w in "${WIFI_INTERFACES[@]}"; do
+        $IW_BIN dev "${w}_ap" del 2>/dev/null || true
+        $NMCLI_BIN dev set "$w" managed yes 2>/dev/null || true
+    done
+
+    # Only attempt fallback if we have an active non-Wi-Fi uplink (e.g. Ethernet / USB tethering)
+    if [ "$IS_WIFI_CONNECTED" -eq 0 ] && [ -n "$INTERNET_IFACE" ] && [ "$INTERNET_IFACE" != "${WIFI_INTERFACES[0]}" ]; then
+        echo "Attempting 2.4GHz recovery with wired uplink $INTERNET_IFACE..."
+        echo "2.4G (Auto-Recovery)" > "$RUN_DIR/active-mode" 2>/dev/null || true
+        FALLBACK_WIFI="${WIFI_INTERFACES[0]}"
+        $NMCLI_BIN dev disconnect "$FALLBACK_WIFI" 2>/dev/null || true
+        $NMCLI_BIN dev set "$FALLBACK_WIFI" managed no 2>/dev/null || true
+        sleep 0.5
+
+        FALLBACK_ARGS=(--ieee80211n)
+        [ -n "$CURRENT_REG" ] && [ "$CURRENT_REG" != "00" ] && FALLBACK_ARGS+=(--country "$CURRENT_REG")
+        FALLBACK_ARGS+=(-c 6 --freq-band 2.4 --ht_capab "$(get_24g_ht_capab 6)")
+        FALLBACK_ARGS+=(-g "$SAFE_GATEWAY")
+        append_security_and_dns_args FALLBACK_ARGS
+        FALLBACK_ARGS+=("$FALLBACK_WIFI" "$INTERNET_IFACE" "$SSID")
+        if [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
+            FALLBACK_ARGS+=("$PASSWORD")
+        fi
+        exec "${INHIBIT_WRAPPER[@]}" $CREATE_AP_BIN "${FALLBACK_ARGS[@]}"
+    fi
+
+    if [ ! -f "$RUN_DIR/last-error" ]; then
+        echo "Hotspot failed to start on interface $WIFI_IFACE (exit code $EXIT_CODE). Check system logs for details." > "$RUN_DIR/last-error" 2>/dev/null || true
+    fi
+fi
+
+exit $EXIT_CODE

@@ -1,0 +1,196 @@
+#!/bin/bash
+# Wi-Fi Hotspot Router - Client Management Engine
+# Queries connected stations and manages MAC blacklist filtering.
+
+set -o pipefail
+
+ACTION="$1"
+MAC="$2"
+USER_NAME="$3"
+
+CALLER_UID="${PKEXEC_UID:-${SUDO_UID:-$(id -u)}}"
+CALLER_USER=$(getent passwd "$CALLER_UID" 2>/dev/null | cut -d: -f1)
+
+if [ -z "$USER_NAME" ]; then
+    USER_NAME="$CALLER_USER"
+fi
+
+if [ -z "$USER_NAME" ]; then
+    echo "Error: Target username required." >&2
+    exit 1
+fi
+
+if ! [[ "$USER_NAME" =~ ^[a-zA-Z0-9_.][a-zA-Z0-9_.-]*\$?$ ]]; then
+    echo "Error: Invalid username format: $USER_NAME" >&2
+    exit 1
+fi
+
+# Ensure unprivileged users can only manage their own hotspot
+if [ "$CALLER_UID" -ne 0 ] && [ "$CALLER_USER" != "$USER_NAME" ]; then
+    echo "Error: Authorization denied. $CALLER_USER cannot manage resources for $USER_NAME." >&2
+    exit 1
+fi
+
+USER_HOME=$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6)
+if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+    echo "Error: Home directory for $USER_NAME not found." >&2
+    exit 1
+fi
+
+IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
+IP_BIN=$(command -v ip || echo "/usr/bin/ip")
+IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
+HOSTAPD_CLI_BIN=$(command -v hostapd_cli || echo "/usr/sbin/hostapd_cli")
+
+DENY_FILE="$USER_HOME/.config/wifi-hotspot.deny"
+HOSTAPD_DENY="$USER_HOME/.config/wifi-hotspot-hostapd.deny"
+
+CTRL_DIR=$(ls -td /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
+
+# Dynamically resolve AP interface from active hostapd configuration
+IFACE=""
+HOSTAPD_CONF=$(ls -t /tmp/create_ap.*/hostapd.conf 2>/dev/null | head -1)
+if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then
+    IFACE=$(grep -E '^interface=' "$HOSTAPD_CONF" 2>/dev/null | cut -d= -f2 | tr -d ' \r\n')
+fi
+if [ -z "$IFACE" ]; then
+    IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | grep -i "UP" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+fi
+if [ -z "$IFACE" ]; then
+    IFACE=$($IP_BIN link show 2>/dev/null | grep -E "ap[0-9]+|_ap" | head -1 | awk -F': ' '{print $2}' | awk '{print $1}')
+fi
+
+validate_mac() {
+    local target="$1"
+    if [[ ! "$target" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$ ]]; then
+        echo "Error: Invalid MAC address format: $target" >&2
+        exit 1
+    fi
+}
+
+sync_hostapd_deny() {
+    awk -F'|' '{print $1}' "$DENY_FILE" 2>/dev/null | grep -E '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$' > "$HOSTAPD_DENY" 2>/dev/null || true
+    touch "$HOSTAPD_DENY"
+    chown "$USER_NAME:$USER_NAME" "$DENY_FILE" "$HOSTAPD_DENY" 2>/dev/null || true
+    chmod 644 "$DENY_FILE" "$HOSTAPD_DENY" 2>/dev/null || true
+}
+
+emit_connected_clients() {
+    if [ -n "$IFACE" ]; then
+        local LEASES_FILE=$(ls -t /tmp/create_ap.*/dnsmasq.leases 2>/dev/null | head -1)
+        [ -z "$LEASES_FILE" ] && [ -f "/var/lib/misc/dnsmasq.leases" ] && LEASES_FILE="/var/lib/misc/dnsmasq.leases"
+
+        $IW_BIN dev "$IFACE" station dump 2>/dev/null | awk '
+            BEGIN { mac=""; rx=0; tx=0; bitrate=""; }
+            /^Station/ {
+                if (mac != "") {
+                    print mac "|" rx "|" tx "|" bitrate;
+                }
+                mac=$2; rx=0; tx=0; bitrate="";
+            }
+            /rx bytes:/ { rx=$3; }
+            /tx bytes:/ { tx=$3; }
+            /tx bitrate:/ {
+                for (i=3; i<=NF; i++) {
+                    bitrate = (bitrate == "") ? $i : bitrate " " $i;
+                }
+            }
+            END {
+                if (mac != "") {
+                    print mac "|" rx "|" tx "|" bitrate;
+                }
+            }
+        ' | while IFS='|' read -r m rx tx bitrate; do
+            [ -z "$m" ] && continue
+            if [ -f "$DENY_FILE" ] && grep -q -i "^$m|" "$DENY_FILE" 2>/dev/null; then
+                continue
+            fi
+            local IP="Unknown IP"
+            local HOSTNAME="Unknown Device"
+            if [ -n "$LEASES_FILE" ] && [ -f "$LEASES_FILE" ]; then
+                local LEASE_LINE=$(grep -i "$m" "$LEASES_FILE" 2>/dev/null | head -1)
+                if [ -n "$LEASE_LINE" ]; then
+                    local rip=$(echo "$LEASE_LINE" | awk '{print $3}')
+                    local rhost=$(echo "$LEASE_LINE" | awk '{print $4}')
+                    [ -n "$rip" ] && IP="$rip"
+                    if [ -n "$rhost" ] && [ "$rhost" != "*" ]; then
+                        HOSTNAME="$rhost"
+                    fi
+                fi
+            fi
+            echo "$m|$HOSTNAME|$rx|$tx|$bitrate|$IP"
+        done
+    fi
+}
+
+emit_blocked_clients() {
+    if [ -f "$DENY_FILE" ]; then
+        cat "$DENY_FILE"
+    fi
+}
+
+case "$ACTION" in
+    status|list_all|list)
+        echo "===CONNECTED==="
+        emit_connected_clients
+        echo "===BLOCKED==="
+        emit_blocked_clients
+        ;;
+
+    list_blocked)
+        emit_blocked_clients
+        ;;
+
+    block)
+        validate_mac "$MAC"
+        RAW_HOSTNAME="$4"
+        CLEAN_HOSTNAME=$(echo "$RAW_HOSTNAME" | tr -cd '[:alnum:] _.-' | head -c 48)
+        [ -z "$CLEAN_HOSTNAME" ] && CLEAN_HOSTNAME="Unknown Device"
+
+        mkdir -p "$USER_HOME/.config"
+        touch "$DENY_FILE"
+        if ! grep -q -i "^$MAC|" "$DENY_FILE" 2>/dev/null; then
+            echo "$MAC|$CLEAN_HOSTNAME" >> "$DENY_FILE"
+        fi
+
+        sync_hostapd_deny
+
+        if [ -n "$CTRL_DIR" ]; then
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl ADD "$MAC" >/dev/null 2>&1 || true
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deauthenticate "$MAC" >/dev/null 2>&1 || true
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" disassociate "$MAC" >/dev/null 2>&1 || true
+        fi
+
+        $IPTABLES_BIN -C FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+            $IPTABLES_BIN -I FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+        $IPTABLES_BIN -C INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || \
+            $IPTABLES_BIN -I INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null || true
+
+        if [ -n "$IFACE" ]; then
+            $IW_BIN dev "$IFACE" station del "$MAC" 2>/dev/null || true
+        fi
+        ;;
+
+    unblock)
+        validate_mac "$MAC"
+        if [ -f "$DENY_FILE" ]; then
+            grep -v -i "^$MAC|" "$DENY_FILE" > "${DENY_FILE}.tmp" 2>/dev/null || true
+            [ -f "${DENY_FILE}.tmp" ] && mv -f "${DENY_FILE}.tmp" "$DENY_FILE"
+        fi
+
+        sync_hostapd_deny
+
+        if [ -n "$CTRL_DIR" ]; then
+            $HOSTAPD_CLI_BIN -p "$CTRL_DIR" deny_acl DEL "$MAC" >/dev/null 2>&1 || true
+        fi
+
+        while $IPTABLES_BIN -D INPUT -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+        while $IPTABLES_BIN -D FORWARD -m mac --mac-source "$MAC" -j DROP 2>/dev/null; do :; done
+        ;;
+
+    *)
+        echo "Error: Unknown action '$ACTION'" >&2
+        echo "Valid actions: status, block, unblock, list_blocked" >&2
+        exit 1
+        ;;
+esac
