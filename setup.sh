@@ -158,7 +158,6 @@ if [ ! -f "$CONFIG_DEST" ]; then
 SSID="hotspot"
 PASSWORD="hotspotpassword"
 BAND="bg"
-INHIBIT_SLEEP="true"
 EOF_CONF
     chmod 600 "$CONFIG_DEST"
     [ -n "$SUDO_USER" ] && chown "$USER_NAME:$USER_NAME" "$CONFIG_DEST" 2>/dev/null || true

@@ -232,7 +232,6 @@ const HotspotRouterToggle = GObject.registerClass(
                 ssid: 'hotspot',
                 password: '',
                 band: 'bg',
-                inhibitSleep: true,
             };
 
             let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
@@ -249,7 +248,6 @@ const HotspotRouterToggle = GObject.registerClass(
                                     case 'SSID': config.ssid = val; break;
                                     case 'PASSWORD': config.password = val; break;
                                     case 'BAND': config.band = val; break;
-                                    case 'INHIBIT_SLEEP': config.inhibitSleep = (val === 'true'); break;
                                 }
                             }
                         }

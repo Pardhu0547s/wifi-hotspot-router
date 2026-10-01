@@ -15,10 +15,5 @@
       <summary>Ethernet / Standalone Hotspot Band</summary>
       <description>Frequency band when sharing a wired connection (2.4 GHz or 5 GHz)</description>
     </key>
-    <key name="inhibit-sleep" type="b">
-      <default>true</default>
-      <summary>Prevent System Sleep While Hotspot Is Active</summary>
-      <description>Inhibit laptop suspend when hotspot is active</description>
-    </key>
   </schema>
 </schemalist>

@@ -29,7 +29,6 @@ SSID="hotspot"
 PASSWORD="hotspotpassword"
 MAX_CLIENTS="10"
 BAND="bg"
-INHIBIT_SLEEP="true"
 
 # Parse user configuration file safely without eval/source
 if [ -f "$CONFIG_FILE" ]; then
@@ -50,9 +49,6 @@ if [ -f "$CONFIG_FILE" ]; then
                     a|5G|5GHz) BAND="a" ;;
                     *) BAND="bg" ;;
                 esac
-                ;;
-            INHIBIT_SLEEP)
-                [ "$val" = "true" ] && INHIBIT_SLEEP="true" || INHIBIT_SLEEP="false"
                 ;;
         esac
     done < "$CONFIG_FILE"
@@ -451,12 +447,7 @@ if [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
     CMD_ARGS+=("$PASSWORD")
 fi
 
-INHIBIT_WRAPPER=()
-if [ "$INHIBIT_SLEEP" = "true" ] && command -v systemd-inhibit >/dev/null 2>&1; then
-    INHIBIT_WRAPPER=(systemd-inhibit --what=idle:sleep:handle-lid-switch --who="Wi-Fi Hotspot Router" --why="Hotspot is sharing network connection")
-fi
-
-"${INHIBIT_WRAPPER[@]}" $CREATE_AP_BIN "${CMD_ARGS[@]}"
+$CREATE_AP_BIN "${CMD_ARGS[@]}"
 EXIT_CODE=$?
 
 # Automatic cleanup on failure; only fallback if independent wired uplink exists
@@ -486,7 +477,7 @@ if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 130 ] && [ $EXIT_CODE -ne 143 ] && [
         if [ -n "$PASSWORD" ] && [ "$PASSWORD" != "none" ]; then
             FALLBACK_ARGS+=("$PASSWORD")
         fi
-        exec "${INHIBIT_WRAPPER[@]}" $CREATE_AP_BIN "${FALLBACK_ARGS[@]}"
+        exec $CREATE_AP_BIN "${FALLBACK_ARGS[@]}"
     fi
 
     if [ ! -f "$RUN_DIR/last-error" ]; then

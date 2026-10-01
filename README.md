@@ -9,7 +9,6 @@ A GNOME Shell extension for simultaneous Wi-Fi hotspot sharing and client connec
 
 - **Wi-Fi Repeater Mode**: Share internet from Wi-Fi without disconnecting from your upstream Wi-Fi network.
 - **Spectrum Auto-Detection**: Automatically selects optimal 2.4GHz and 5GHz channel capabilities (HT40 / VHT80).
-- **Prevent System Sleep**: Keeps the system awake (inhibits idle sleep and lid suspend) while the hotspot is active.
 - **QR Code Sharing**: Dynamic Wi-Fi QR code generation for quick mobile device connections.
 - **Client Management**: Monitor and block/unblock connected devices in real time.
 

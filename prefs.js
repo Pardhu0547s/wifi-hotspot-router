@@ -82,18 +82,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         coreGroup.add(bandRow);
 
-        // Group 2: Power Policy Configuration
-        const advGroup = new Adw.PreferencesGroup({
-            title: 'Power Management',
-        });
-        page.add(advGroup);
-
-        const sleepRow = new Adw.SwitchRow({
-            title: 'Prevent System Sleep',
-            active: config.inhibitSleep,
-        });
-        advGroup.add(sleepRow);
-
         const triggerSave = () => {
             let rawSsid = ssidRow.get_text() || '';
             let ssid = rawSsid.substring(0, 32).replace(/["`$\\]/g, '').trim();
@@ -101,7 +89,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
 
             let pass = passwordRow.get_text() || '';
             let band = bandRow.selected === 1 ? 'a' : 'bg';
-            let inhibitSleep = sleepRow.active;
 
             let passValid = pass.length >= 8 && pass.length <= 63;
             passWarning.visible = !passValid;
@@ -111,9 +98,7 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             ssidWarning.visible = !ssidValid;
             if (!ssidValid) return false;
 
-            const saveSuccess = this._saveConfig(
-                ssid, pass, band, inhibitSleep
-            );
+            const saveSuccess = this._saveConfig(ssid, pass, band);
 
             if (!saveSuccess) {
                 saveButton.sensitive = true;
@@ -124,7 +109,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                 try {
                     settings.set_string('hotspot-ssid', ssid);
                     settings.set_string('hotspot-band', band);
-                    settings.set_boolean('inhibit-sleep', inhibitSleep);
                 } catch (e) {
                     console.warn(`[HotspotRouter] GSettings update error: ${e.message}`);
                 }
@@ -176,9 +160,8 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         ssidRow.connect('changed', markChanged);
         passwordRow.connect('changed', markChanged);
         bandRow.connect('notify::selected', markChanged);
-        sleepRow.connect('notify::active', markChanged);
 
-        // Group 3: Project Links
+        // Group 2: Project Links
         const supportGroup = new Adw.PreferencesGroup({
             title: 'About & Support',
         });
@@ -217,14 +200,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             ssid: 'hotspot',
             password: 'hotspotpassword',
             band: 'bg',
-            inhibitSleep: true,
         };
 
         if (settings) {
             try {
                 config.ssid = settings.get_string('hotspot-ssid') || config.ssid;
                 config.band = settings.get_string('hotspot-band') || config.band;
-                config.inhibitSleep = settings.get_boolean('inhibit-sleep');
             } catch (e) { }
         }
 
@@ -242,7 +223,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                                 case 'SSID': config.ssid = val; break;
                                 case 'PASSWORD': config.password = val; break;
                                 case 'BAND': config.band = val; break;
-                                case 'INHIBIT_SLEEP': config.inhibitSleep = (val === 'true'); break;
                             }
                         }
                     }
@@ -252,13 +232,12 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         return config;
     }
 
-    _saveConfig(ssid, password, band, inhibitSleep) {
+    _saveConfig(ssid, password, band) {
         let configDir = GLib.get_user_config_dir();
         let path = configDir + '/wifi-hotspot.conf';
         let output = `SSID="${ssid}"
 PASSWORD="${password}"
 BAND="${band}"
-INHIBIT_SLEEP="${inhibitSleep}"
 `;
         try {
             GLib.mkdir_with_parents(configDir, 448);
