@@ -12,16 +12,7 @@ const HIDE_LABEL = 'Hide Wi-Fi QR Code';
 
 const escapeQr = text => text.replace(/([\\;:,"\/])/g, '\\$1');
 
-/**
- * Collapsible Wi-Fi QR code in the quick settings menu. The image is rendered
- * with the qrencode command into the user's runtime directory.
- */
 export class QrCodeSection {
-    /**
-     * @param {St.BoxLayout} parent - container the menu items are added to
-     * @param {CommandRunner} runner - runs qrencode
-     * @param {Function} getConfig - returns the current {ssid, password}
-     */
     constructor(parent, runner, getConfig) {
         this._runner = runner;
         this._getConfig = getConfig;
@@ -54,10 +45,6 @@ export class QrCodeSection {
         return this._shown;
     }
 
-    /**
-     * @param {boolean} active - whether the hotspot is running
-     * @param {boolean} forceRefresh - regenerate even if nothing changed
-     */
     sync(active, forceRefresh = false) {
         if (active) {
             this._toggleItem.show();
@@ -74,13 +61,12 @@ export class QrCodeSection {
     }
 
     async refresh(forceRefresh = false) {
-        const {ssid, password} = this._getConfig();
+        const {ssid, password} = await this._getConfig();
         const qrString = `WIFI:S:${escapeQr(ssid)};T:WPA;P:${escapeQr(password)};;`;
         if (!forceRefresh && this._lastQrString === qrString && this._container.visible)
             return;
         this._lastQrString = qrString;
 
-        // A new file name each time makes St.Icon reload the image.
         const file = GLib.build_filenamev([
             GLib.get_user_runtime_dir(),
             `wifi-hotspot-qr-${GLib.get_user_name()}-${Date.now()}.png`,

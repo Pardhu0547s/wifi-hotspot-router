@@ -6,9 +6,6 @@ import {readTextFile} from '../lib/utils.js';
 const ACTIVE_MODE_FILE = '/run/wifi-hotspot/active-mode';
 const LAST_ERROR_FILE = '/run/wifi-hotspot/last-error';
 
-/**
- * Controls the wifi-hotspot@<user>.service systemd unit.
- */
 export class HotspotService {
     constructor(runner) {
         this._runner = runner;
@@ -24,17 +21,14 @@ export class HotspotService {
         return this._runner.run(['systemctl', 'stop', this._unitName]);
     }
 
-    /** @returns {string} band reported by the running service, or '' */
-    readActiveMode() {
-        return readTextFile(ACTIVE_MODE_FILE)?.trim() ?? '';
+    async readActiveMode() {
+        return (await readTextFile(ACTIVE_MODE_FILE))?.trim() ?? '';
     }
 
-    /** @returns {string} error message left by the last failed start, or '' */
-    readLastError() {
-        return readTextFile(LAST_ERROR_FILE)?.trim() ?? '';
+    async readLastError() {
+        return (await readTextFile(LAST_ERROR_FILE))?.trim() ?? '';
     }
 
-    /** @returns {Promise<boolean>} whether the unit is active or activating */
     isActive() {
         return new Promise((resolve, reject) => {
             Gio.DBus.system.call(
@@ -63,7 +57,6 @@ export class HotspotService {
         try {
             Gio.File.new_for_path(LAST_ERROR_FILE).delete(null);
         } catch {
-            // Best effort: the file may not exist or may not belong to this user.
         }
     }
 }

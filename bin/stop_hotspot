@@ -1,6 +1,4 @@
 #!/bin/bash
-# Wi-Fi Hotspot Router - Teardown Script
-# Restores network interfaces, cleans firewall state, and terminates lingering processes.
 
 USER_NAME="$1"
 
@@ -11,7 +9,6 @@ IP_BIN=$(command -v ip || echo "/usr/bin/ip")
 NMCLI_BIN=$(command -v nmcli || echo "/usr/bin/nmcli")
 IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
 
-# Stop create_ap instances
 $CREATE_AP_BIN --stop ap0 2>/dev/null || true
 
 for instance in /tmp/create_ap.*; do
@@ -23,11 +20,9 @@ for instance in /tmp/create_ap.*; do
     fi
 done
 
-# Kill any orphaned processes tied to create_ap instances
 pkill -f 'hostapd.*create_ap' 2>/dev/null || true
 pkill -f 'dnsmasq.*create_ap' 2>/dev/null || true
 
-# Check whether Ethernet LAN is currently connected
 DEFAULT_ROUTE=$($IP_BIN route show default 2>/dev/null | head -n 1)
 DEFAULT_IFACE=$(echo "$DEFAULT_ROUTE" | awk '{print $5}')
 IS_LAN_CONNECTED=0
@@ -41,7 +36,6 @@ if [ -n "$DEFAULT_IFACE" ]; then
     done
 fi
 
-# Restore NetworkManager management and power saving on wireless devices
 for w in $($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}' | grep -v '_ap$' | grep -v '^ap[0-9]'); do
     $CREATE_AP_BIN --stop "$w" 2>/dev/null || true
     $IW_BIN dev "${w}_ap" del 2>/dev/null || true
@@ -55,7 +49,6 @@ done
 $IW_BIN dev ap0 del 2>/dev/null || true
 rm -rf /tmp/create_ap.* 2>/dev/null || true
 
-# Firewall cleanup
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
     ufw route delete allow in on ap0 2>/dev/null || true
     ufw delete allow in on ap0 2>/dev/null || true
@@ -69,14 +62,11 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null |
     firewall-cmd --zone=trusted --remove-interface=ap0 2>/dev/null || true
 fi
 
-# Remove TCP MSS clamping
 $IPTABLES_BIN -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 $IPTABLES_BIN -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
-# Remove captive portal isolation rule
 while $IPTABLES_BIN -w -D FORWARD -p tcp -m multiport --dports 8090,8092 -j REJECT --reject-with tcp-reset 2>/dev/null; do :; done
 
-# Remove blocked MAC DROP rules
 if [ -n "$USER_NAME" ]; then
     USER_HOME=$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6)
     if [ -n "$USER_HOME" ] && [ -f "$USER_HOME/.config/wifi-hotspot-hostapd.deny" ]; then
@@ -89,5 +79,4 @@ if [ -n "$USER_NAME" ]; then
     fi
 fi
 
-# Remove runtime markers
 rm -f /run/wifi-hotspot/active-mode /run/wifi-hotspot/active-user /run/wifi-hotspot/active-gateway /run/wifi-hotspot/last-error 2>/dev/null || true

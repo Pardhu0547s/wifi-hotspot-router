@@ -7,16 +7,7 @@ const WATCHDOG_SECONDS = 20;
 const RESUME_DELAY_MS = 800;
 const RECOVER_DELAY_MS = 1500;
 
-/**
- * Pauses the hotspot while the user connects the Wi-Fi card to another
- * network and restarts it once that connection succeeds or fails.
- */
 export class WifiHandoverMonitor {
-    /**
-     * @param {HotspotService} service - service to stop and restart
-     * @param {CommandRunner} runner - owner of the cancellable used for NetworkManager
-     * @param {object} callbacks - canHandover(), onStatus(subtitle, header), onFinished()
-     */
     constructor(service, runner, {canHandover, onStatus, onFinished}) {
         this._service = service;
         this._runner = runner;
@@ -34,7 +25,6 @@ export class WifiHandoverMonitor {
         NM.Client.new_async(this._runner.cancellable, (_source, result) => this._onClientReady(result));
     }
 
-    /** Forget any handover in progress, e.g. because the user toggled the hotspot. */
     abort() {
         this._inProgress = false;
         this._watchdogId = removeSource(this._watchdogId);
@@ -72,7 +62,6 @@ export class WifiHandoverMonitor {
             if (device.get_device_type() !== NM.DeviceType.WIFI)
                 continue;
 
-            // Skip the access-point interfaces created by the hotspot itself.
             const iface = device.get_iface();
             if (iface && (iface === 'ap0' || iface === 'ap1' || iface.endsWith('_ap')))
                 continue;
@@ -109,7 +98,6 @@ export class WifiHandoverMonitor {
 
         this._inProgress = true;
 
-        // Give up if the Wi-Fi connection never finishes either way.
         this._watchdogId = removeSource(this._watchdogId);
         this._watchdogId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, WATCHDOG_SECONDS, () => {
             this._watchdogId = 0;

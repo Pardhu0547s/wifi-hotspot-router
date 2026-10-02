@@ -8,13 +8,6 @@ import {isCancelled} from '../lib/utils.js';
 
 const HELPER_COMMAND = ['pkexec', '--disable-internal-agent', '/usr/local/bin/manage_hotspot_clients'];
 
-/**
- * Parse the helper's status output:
- * "===CONNECTED===\nmac|name\n...===BLOCKED===\nmac|name\n..."
- *
- * @param {string} output - text printed by the helper
- * @returns {{connected: object[], blocked: object[]}} devices as {mac, name}
- */
 function parseStatus(output) {
     const [connectedText = '', blockedText = ''] = output.split('===BLOCKED===');
 
@@ -32,7 +25,6 @@ function parseStatus(output) {
     };
 }
 
-/** A collapsible "Show/Hide <noun> Devices" entry with its list of rows. */
 class DeviceList {
     constructor(parent, noun, onExpand) {
         this._noun = noun;
@@ -41,13 +33,28 @@ class DeviceList {
         this._count = 0;
 
         this._toggleItem = new PopupMenu.PopupMenuItem(`Show ${noun} Devices`);
-        this._toggleItem.connect('activate', () => this._toggle());
+        this._toggleSignalId = this._toggleItem.connect('activate', () => this._toggle());
         this._section = new PopupMenu.PopupMenuSection();
 
         parent.add_child(this._toggleItem);
         parent.add_child(this._section.actor);
         this._toggleItem.hide();
         this._section.actor.hide();
+    }
+
+    destroy() {
+        if (this._toggleItem) {
+            if (this._toggleSignalId) {
+                this._toggleItem.disconnect(this._toggleSignalId);
+                this._toggleSignalId = 0;
+            }
+            this._toggleItem.destroy();
+            this._toggleItem = null;
+        }
+        if (this._section) {
+            this._section.destroy();
+            this._section = null;
+        }
     }
 
     show() {
@@ -94,15 +101,7 @@ class DeviceList {
     }
 }
 
-/**
- * Lists the devices connected to the hotspot and lets the user block or
- * unblock them through the privileged helper script.
- */
 export class ClientsSection {
-    /**
-     * @param {St.BoxLayout} parent - container the menu items are added to
-     * @param {object} options - runner, menu and isActive()
-     */
     constructor(parent, {runner, menu, isActive}) {
         this._runner = runner;
         this._menu = menu;
@@ -114,7 +113,17 @@ export class ClientsSection {
         this._blocked = new DeviceList(parent, 'Blocked', () => this.refresh());
     }
 
-    /** @param {boolean} active - whether the hotspot is running */
+    destroy() {
+        if (this._connected) {
+            this._connected.destroy();
+            this._connected = null;
+        }
+        if (this._blocked) {
+            this._blocked.destroy();
+            this._blocked = null;
+        }
+    }
+
     sync(active) {
         if (!active) {
             this._lastOutput = null;
@@ -140,7 +149,6 @@ export class ClientsSection {
         try {
             result = await this._runner.run([...HELPER_COMMAND, 'status', '', this._username]);
         } catch {
-            // Not logged: this runs on every poll, and the next poll retries.
             return;
         }
 

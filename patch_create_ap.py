@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Patch create_ap for wifi-hotspot-router extension across all Linux distributions.
-
-Applies two patches:
-1. Client Limits & MAC Filter: Adds MAX_NUM_STA and DENY_MAC_FILE support
-   to hostapd.conf generation.
-2. 5GHz IR-CONCURRENT AP: Comments out the 'no IR' check that blocks 5GHz AP
-   on Intel/other WiFi cards with self-managed regulatory domains.
-"""
 
 import sys
 import os
@@ -24,7 +16,6 @@ print(f"[+] Patching {filepath}...")
 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
     content = f.read()
 
-# Patch 1: Add MAX_NUM_STA and DENY_MAC_FILE support after hostapd.conf EOF
 patch1_target = 'ap_isolate=$ISOLATE_CLIENTS\nEOF'
 patch1_replacement = '''ap_isolate=$ISOLATE_CLIENTS
 EOF
@@ -39,7 +30,6 @@ if patch1_target in content:
 else:
     print("[!] Patch 1 target not found or already applied")
 
-# Patch 2: Comment out the 'no IR' check to allow 5GHz AP
 patch2_pattern = re.compile(r'^\s*\[\[\s*"\${CHANNEL_INFO}"\s*==\s*\*no\\?\s+IR\*\s*\]\]\s*&&\s*return\s+1', re.MULTILINE)
 if patch2_pattern.search(content):
     content = patch2_pattern.sub(r'        # [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1  # Patched: allow 5GHz AP on IR-CONCURRENT channels', content, count=1)
@@ -49,7 +39,6 @@ elif 'Patched: allow 5GHz AP on IR-CONCURRENT channels' in content:
 else:
     print("[!] Patch 2 target not found")
 
-# Patch 2b: Enable 802.11h DFS Spectrum Management when country_code is set
 patch2b_target = 'country_code=${COUNTRY}\nieee80211d=1'
 patch2b_replacement = 'country_code=${COUNTRY}\nieee80211d=1\nieee80211h=1'
 
@@ -59,7 +48,6 @@ if patch2b_target in content:
 else:
     print("[!] Patch 2b target not found or already applied")
 
-# Patch 3: Support pure WPA3-Personal (SAE only)
 patch3_target = '''    if [[ "$WPA_VERSION" == "3" ]]; then
         # Configuring for WPA3 Transition Mode
         # 80211w must be 1 or Apple Devices will not connect. 

@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Patch create_ap for wifi-hotspot-router extension.
-
-Applies:
-1. Client Limits & MAC Filter: Adds MAX_NUM_STA and DENY_MAC_FILE support to hostapd.conf.
-2. 5GHz IR-CONCURRENT AP: Disables the 'no IR' guard that blocks 5GHz AP on self-managed regulatory cards.
-"""
 
 import sys
 import os
@@ -26,7 +20,6 @@ def main():
 
     original_content = content
 
-    # Patch 1: Station limit and MAC filter configuration in hostapd.conf
     patch1_target = 'ap_isolate=$ISOLATE_CLIENTS\nEOF'
     patch1_replacement = '''ap_isolate=$ISOLATE_CLIENTS
 EOF
@@ -41,14 +34,12 @@ EOF
     elif 'max_num_sta=$MAX_NUM_STA' in content:
         print("[*] Patch 1 already present: Client Limits & MAC Filter")
 
-    # Patch 2: Allow 5GHz AP on IR-CONCURRENT channels
     patch2_pattern = re.compile(r'^\s*\[\[\s*"\${CHANNEL_INFO}"\s*==\s*\*no\\?\s+IR\*\s*\]\]\s*&&\s*return\s+1', re.MULTILINE)
     if patch2_pattern.search(content):
         content = patch2_pattern.sub(r'        # [[ "${CHANNEL_INFO}" == *no\\ IR* ]] && return 1  # Patched: allow 5GHz AP on IR-CONCURRENT channels', content, count=1)
         print("[+] Patch 2 applied: 5GHz IR-CONCURRENT AP support")
     elif 'Patched: allow 5GHz AP on IR-CONCURRENT channels' in content:
         print("[*] Patch 2 already present: 5GHz IR-CONCURRENT AP support")
-
 
     if content != original_content:
         with open(filepath, 'w', encoding='utf-8') as f:

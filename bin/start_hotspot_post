@@ -1,11 +1,8 @@
 #!/bin/bash
-# Wi-Fi Hotspot Router - Post-startup Initialization Hook
-# Executed by systemd (ExecStartPost) after create_ap launches.
 
 IP_BIN=$(command -v ip || echo "/usr/bin/ip")
 IW_BIN=$(command -v iw || echo "/usr/sbin/iw")
 
-# Determine active AP interface from hostapd configuration
 AP_DEV="ap0"
 HOSTAPD_CONF=$(ls -t /tmp/create_ap.*/hostapd.conf 2>/dev/null | head -1)
 if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then
@@ -13,7 +10,6 @@ if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then
     [ -n "$CONF_IFACE" ] && AP_DEV="$CONF_IFACE"
 fi
 
-# Wait for create_ap to assign IP address to AP interface
 if [ -x "$IP_BIN" ]; then
     for _ in $(seq 1 30); do
         if $IP_BIN addr show dev "$AP_DEV" 2>/dev/null | grep -q "inet "; then
@@ -22,19 +18,15 @@ if [ -x "$IP_BIN" ]; then
         sleep 0.5
     done
 
-    # Set transmit queue length for higher throughput
     $IP_BIN link set dev "$AP_DEV" txqueuelen 5000 2>/dev/null || true
 fi
 
-# Maintain power_save off across all wireless interfaces
 if [ -x "$IW_BIN" ]; then
     for w in $($IW_BIN dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
         $IW_BIN dev "$w" set power_save off 2>/dev/null || true
     done
 fi
 
-# Isolate hotspot clients from upstream captive portal (e.g. Cyberoam / Sophos ports 8090 & 8092)
-# Prevents clients from sending login/logout packets that disconnect the host session.
 IPTABLES_BIN=$(command -v iptables || echo "/usr/sbin/iptables")
 if [ -x "$IPTABLES_BIN" ]; then
     while $IPTABLES_BIN -w -D FORWARD -i "$AP_DEV" -p tcp -m multiport --dports 8090,8092 -j REJECT --reject-with tcp-reset 2>/dev/null; do :; done

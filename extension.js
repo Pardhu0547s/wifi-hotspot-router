@@ -10,7 +10,6 @@ export default class HotspotRouterExtension extends Extension {
         this._indicator = new HotspotIndicator(this);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
 
-        // At login the quick settings grid may not be populated yet; retry once when idle.
         if (!placeToggle(this._indicator.hotspotToggle)) {
             this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                 this._idleId = 0;

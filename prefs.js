@@ -50,7 +50,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
         });
         networkGroup.add(bandRow);
 
-        // Shows the warning icons and returns the form values if all are valid.
         const validateForm = () => {
             const form = {
                 ssid: ssidRow.text.trim(),
@@ -85,7 +84,6 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
                 return;
             }
 
-            // The extension listens to these keys to refresh its menu.
             settings.set_string('hotspot-ssid', form.ssid);
             settings.set_string('hotspot-band', form.band);
 

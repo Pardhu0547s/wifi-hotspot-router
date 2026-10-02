@@ -1,6 +1,4 @@
 #!/bin/bash
-# Wi-Fi Hotspot Router - Automated Deployment & Setup
-# Installs system dependencies, engine scripts, systemd units, polkit rules, and GNOME extension files.
 
 set -e
 
@@ -64,7 +62,6 @@ else
     echo "All core system dependencies are satisfied."
 fi
 
-# Locate or download create_ap
 CREATE_AP_PATH=$(command -v create_ap || true)
 if [ -z "$CREATE_AP_PATH" ]; then
     if [ -x "/usr/local/bin/create_ap" ]; then

@@ -1,6 +1,4 @@
 #!/bin/bash
-# Wi-Fi Hotspot Router - Client Management Engine
-# Queries connected stations and manages MAC blacklist filtering.
 
 set -o pipefail
 
@@ -41,7 +39,6 @@ HOSTAPD_DENY="$USER_HOME/.config/wifi-hotspot-hostapd.deny"
 
 CTRL_DIR=$(ls -td /tmp/create_ap.*/hostapd_ctrl 2>/dev/null | head -1)
 
-# Dynamically resolve AP interface from active hostapd configuration
 IFACE=""
 HOSTAPD_CONF=$(ls -t /tmp/create_ap.*/hostapd.conf 2>/dev/null | head -1)
 if [ -n "$HOSTAPD_CONF" ] && [ -f "$HOSTAPD_CONF" ]; then

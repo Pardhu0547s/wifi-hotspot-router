@@ -32,10 +32,12 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         this._transitioning = false;
         this._runner = new CommandRunner();
         this._service = new HotspotService(this._runner);
-        this._config = loadOrCreateConfig();
-        this._updateLabels();
+        this._config = {ssid: 'hotspot', password: '', band: 'bg'};
 
         this._buildMenu();
+        this._reloadConfig();
+        this._updateLabels();
+
         this.connect('clicked', () => this._handleToggle(this.checked));
         this.menu.connect('open-state-changed', (_menu, isOpen) => {
             if (isOpen)
@@ -62,11 +64,16 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
 
     destroy() {
         this._pollId = removeSource(this._pollId);
+        this._clients.destroy();
+        this._clients = null;
         this._handover.destroy();
+        this._handover = null;
         this._runner.destroy();
+        this._runner = null;
         this._settings.disconnect(this._settingsChangedId);
         this._settings = null;
         this._qr.destroy();
+        this._qr = null;
         super.destroy();
     }
 
@@ -112,17 +119,17 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         return this._config;
     }
 
-    _onMenuOpened() {
+    async _onMenuOpened() {
         this._reloadConfig();
-        this._updateLabels();
+        await this._updateLabels();
         this._syncSections(true);
     }
 
-    _onSettingsChanged() {
+    async _onSettingsChanged() {
         this._reloadConfig();
-        this._updateLabels();
+        await this._updateLabels();
         if (this.menu.isOpen && this.checked && this._qr.isShown)
-            this._qr.refresh();
+            this._qr.refresh(true);
     }
 
     _syncSections(forceQrRefresh = false) {
@@ -130,8 +137,8 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         this._clients.sync(this.checked);
     }
 
-    _readBandLabel() {
-        const activeMode = this.checked ? this._service.readActiveMode() : '';
+    async _readBandLabel() {
+        const activeMode = this.checked ? await this._service.readActiveMode() : '';
         const mode = activeMode || this._config.band;
 
         if (mode.includes('5G') || mode === 'a')
@@ -141,8 +148,8 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         return '2.4GHz';
     }
 
-    _updateLabels() {
-        const band = this._readBandLabel();
+    async _updateLabels() {
+        const band = await this._readBandLabel();
         if (!this._transitioning)
             this.subtitle = this.checked ? band : 'Off';
 
@@ -152,17 +159,12 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         this.menu.setHeader(ICON_NAME, `Hotspot (${band})`, status);
     }
 
-    _showBusy(subtitle, header = null) {
+    async _showBusy(subtitle, header = null) {
         this.subtitle = subtitle;
         if (header !== null)
-            this.menu.setHeader(ICON_NAME, `Hotspot (${this._readBandLabel()})`, header);
+            this.menu.setHeader(ICON_NAME, `Hotspot (${await this._readBandLabel()})`, header);
     }
 
-    /**
-     * Align the toggle with the real state of the systemd unit.
-     *
-     * @returns {Promise<boolean>} false if the extension was disabled meanwhile
-     */
     async _syncServiceState() {
         let active = false;
         try {
@@ -170,13 +172,12 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         } catch (e) {
             if (isCancelled(e))
                 return false;
-            // Any other failure means the state is unknown: show the toggle as off.
         }
 
         if (this.checked !== active) {
             this.checked = active;
             if (!this._transitioning)
-                this._updateLabels();
+                await this._updateLabels();
         }
         return true;
     }
@@ -184,7 +185,7 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
     async _handleToggle(activate) {
         this._transitioning = true;
         this._handover.abort();
-        this._showBusy(
+        await this._showBusy(
             activate ? 'Starting...' : 'Stopping...',
             activate ? 'Starting hotspot...' : 'Stopping hotspot...');
 
@@ -200,9 +201,9 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         if (!await this._syncServiceState())
             return;
 
-        this._updateLabels();
+        await this._updateLabels();
         if (activate && !this.checked) {
-            const message = this._service.readLastError();
+            const message = await this._service.readLastError();
             if (message)
                 Main.notify('Wi-Fi Hotspot Router', message);
         }
@@ -214,7 +215,7 @@ class HotspotToggle extends QuickSettings.QuickMenuToggle {
         if (!await this._syncServiceState())
             return;
 
-        this._updateLabels();
+        await this._updateLabels();
         if (this.menu.isOpen && this.checked)
             this._syncSections();
     }

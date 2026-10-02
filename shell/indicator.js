@@ -20,13 +20,6 @@ class HotspotIndicator extends QuickSettings.SystemIndicator {
     }
 });
 
-/**
- * Move the toggle next to the network toggle. This uses private GNOME Shell
- * members, so it only repositions when they exist.
- *
- * @param {HotspotToggle} toggle - the toggle to move
- * @returns {boolean} false if the quick settings grid is not ready yet
- */
 export function placeToggle(toggle) {
     const quickSettings = Main.panel.statusArea.quickSettings;
     const grid = quickSettings.menu._grid;
