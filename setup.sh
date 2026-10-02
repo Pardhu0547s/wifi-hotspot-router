@@ -146,6 +146,8 @@ else
     cp "$SOURCE_DIR/prefs.js" "$TARGET_DIR/"
     cp "$SOURCE_DIR/stylesheet.css" "$TARGET_DIR/"
     cp -r "$SOURCE_DIR/schemas" "$TARGET_DIR/"
+    cp -r "$SOURCE_DIR/lib" "$TARGET_DIR/"
+    cp -r "$SOURCE_DIR/shell" "$TARGET_DIR/"
     [ -n "$SUDO_USER" ] && chown -R "$USER_NAME:$USER_NAME" "$TARGET_DIR" 2>/dev/null || true
     echo "Extension installed to $TARGET_DIR."
 fi
