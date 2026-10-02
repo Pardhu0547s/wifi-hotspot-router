@@ -1,76 +1,44 @@
-import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 
+import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+
+import {isValidPassphrase, isValidSsid, loadOrCreateConfig, saveConfig} from './lib/config.js';
+
 export default class HotspotRouterPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        let settings = null;
-        try {
-            settings = this.getSettings();
-        } catch (e) {
-            console.warn(`[HotspotRouter] GSettings schema not compiled: ${e.message}`);
-        }
-
-        const config = this._loadSavedConfig(settings);
-        let hasUnsavedChanges = false;
+        const settings = this.getSettings();
+        const config = loadOrCreateConfig();
 
         const page = new Adw.PreferencesPage();
         window.add(page);
 
-        // Save confirmation banner
-        const actionGroup = new Adw.PreferencesGroup();
-        page.add(actionGroup);
-
-        const saveRow = new Adw.ActionRow({
-            title: 'Unsaved Changes',
-        });
-
+        const saveGroup = new Adw.PreferencesGroup({visible: false});
         const saveButton = new Gtk.Button({
             label: 'Save & Apply',
             css_classes: ['suggested-action'],
             valign: Gtk.Align.CENTER,
             sensitive: false,
         });
+        const saveRow = new Adw.ActionRow({title: 'Unsaved Changes'});
         saveRow.add_suffix(saveButton);
-        actionGroup.add(saveRow);
-        saveRow.visible = false;
-        actionGroup.visible = false;
+        saveGroup.add(saveRow);
+        page.add(saveGroup);
 
-        // Group 1: Wireless Network Credentials & Radio
-        const coreGroup = new Adw.PreferencesGroup({
-            title: 'Wireless Network Settings',
-        });
-        page.add(coreGroup);
+        const networkGroup = new Adw.PreferencesGroup({title: 'Wireless Network Settings'});
+        page.add(networkGroup);
 
-        const ssidRow = new Adw.EntryRow({
-            title: 'Hotspot Name (SSID)',
-            text: config.ssid,
-        });
-        coreGroup.add(ssidRow);
-
-        const ssidWarning = new Gtk.Image({
-            iconName: 'dialog-warning-symbolic',
-            visible: false,
-            tooltipText: 'SSID must be between 1 and 32 characters',
-        });
-        ssidWarning.add_css_class('error');
+        const ssidRow = new Adw.EntryRow({title: 'Hotspot Name (SSID)', text: config.ssid});
+        const ssidWarning = this._createWarningIcon('SSID must be between 1 and 32 characters');
         ssidRow.add_suffix(ssidWarning);
+        networkGroup.add(ssidRow);
 
-        const passwordRow = new Adw.PasswordEntryRow({
-            title: 'Security Passphrase',
-            text: config.password,
-        });
-        coreGroup.add(passwordRow);
-
-        const passWarning = new Gtk.Image({
-            iconName: 'dialog-warning-symbolic',
-            visible: false,
-            tooltipText: 'Passphrase must be between 8 and 63 characters',
-        });
-        passWarning.add_css_class('error');
-        passwordRow.add_suffix(passWarning);
+        const passwordRow = new Adw.PasswordEntryRow({title: 'Security Passphrase', text: config.password});
+        const passphraseWarning = this._createWarningIcon('Passphrase must be between 8 and 63 characters');
+        passwordRow.add_suffix(passphraseWarning);
+        networkGroup.add(passwordRow);
 
         const bandModel = new Gtk.StringList();
         bandModel.append('2.4 GHz (Long Range)');
@@ -80,171 +48,83 @@ export default class HotspotRouterPreferences extends ExtensionPreferences {
             model: bandModel,
             selected: config.band === 'a' ? 1 : 0,
         });
-        coreGroup.add(bandRow);
+        networkGroup.add(bandRow);
 
-        const triggerSave = () => {
-            let rawSsid = ssidRow.get_text() || '';
-            let ssid = rawSsid.trim();
-
-            let pass = passwordRow.get_text() || '';
-            let band = bandRow.selected === 1 ? 'a' : 'bg';
-
-            let ssidBytes = new TextEncoder().encode(ssid).length;
-            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !/[\\"$`\r\n]/.test(ssid);
+        // Shows the warning icons and returns the form values if all are valid.
+        const validateForm = () => {
+            const form = {
+                ssid: ssidRow.text.trim(),
+                password: passwordRow.text,
+                band: bandRow.selected === 1 ? 'a' : 'bg',
+            };
+            const ssidValid = isValidSsid(form.ssid);
+            const passphraseValid = isValidPassphrase(form.password);
             ssidWarning.visible = !ssidValid;
-            if (!ssidValid) return false;
-
-            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !/[\\"$`\r\n]/.test(pass);
-            passWarning.visible = !passValid;
-            if (!passValid) return false;
-
-            const saveSuccess = this._saveConfig(ssid, pass, band);
-
-            if (!saveSuccess) {
-                saveButton.sensitive = true;
-                return false;
-            }
-
-            if (settings) {
-                try {
-                    settings.set_string('hotspot-ssid', ssid);
-                    settings.set_string('hotspot-band', band);
-                } catch (e) {
-                    console.warn(`[HotspotRouter] GSettings update error: ${e.message}`);
-                }
-            }
-
-            hasUnsavedChanges = false;
-            saveRow.visible = false;
-            actionGroup.visible = false;
-            saveButton.sensitive = false;
-
-            try {
-                let username = GLib.get_user_name();
-                let proc = new Gio.Subprocess({
-                    argv: ['systemctl', 'try-restart', `wifi-hotspot@${username}.service`],
-                    flags: Gio.SubprocessFlags.NONE,
-                });
-                proc.init(null);
-                proc.wait_async(null, null);
-            } catch (e) {
-                console.error(e);
-            }
-
-            try {
-                window.add_toast(new Adw.Toast({ title: 'Settings saved and applied successfully' }));
-            } catch (e) { }
-
-            return true;
+            passphraseWarning.visible = !passphraseValid;
+            return ssidValid && passphraseValid ? form : null;
         };
+
+        const onFormChanged = () => {
+            saveGroup.visible = true;
+            saveButton.sensitive = validateForm() !== null;
+        };
+        ssidRow.connect('changed', onFormChanged);
+        passwordRow.connect('changed', onFormChanged);
+        bandRow.connect('notify::selected', onFormChanged);
 
         saveButton.connect('clicked', () => {
-            triggerSave();
+            const form = validateForm();
+            if (!form)
+                return;
+
+            try {
+                saveConfig(form);
+            } catch (e) {
+                console.error(`Failed to save the hotspot configuration: ${e.message}`);
+                window.add_toast(new Adw.Toast({title: 'Could not save settings'}));
+                return;
+            }
+
+            // The extension listens to these keys to refresh its menu.
+            settings.set_string('hotspot-ssid', form.ssid);
+            settings.set_string('hotspot-band', form.band);
+
+            saveGroup.visible = false;
+            saveButton.sensitive = false;
+            this._restartService();
+            window.add_toast(new Adw.Toast({title: 'Settings saved and applied successfully'}));
         });
 
-        const markChanged = () => {
-            let ssid = ssidRow.get_text() || '';
-            let ssidBytes = new TextEncoder().encode(ssid.trim()).length;
-            let ssidValid = ssidBytes >= 1 && ssidBytes <= 32 && !/[\\"$`\r\n]/.test(ssid);
-            ssidWarning.visible = !ssidValid;
+        const aboutGroup = new Adw.PreferencesGroup({title: 'About & Support'});
+        page.add(aboutGroup);
 
-            let pass = passwordRow.get_text() || '';
-            let passValid = /^[\x20-\x7E]{8,63}$/.test(pass) && !/[\\"$`\r\n]/.test(pass);
-            passWarning.visible = !passValid;
-
-            hasUnsavedChanges = true;
-            actionGroup.visible = true;
-            saveRow.visible = true;
-            saveButton.sensitive = passValid && ssidValid;
-        };
-
-        ssidRow.connect('changed', markChanged);
-        passwordRow.connect('changed', markChanged);
-        bandRow.connect('notify::selected', markChanged);
-
-        // Group 2: Project Links
-        const supportGroup = new Adw.PreferencesGroup({
-            title: 'About & Support',
-        });
-        page.add(supportGroup);
-
-        const supportRow = new Adw.ActionRow({
-            title: 'GitHub Repository',
-        });
-        const starButton = new Gtk.LinkButton({
-            label: 'Donate / GitHub',
-            uri: 'https://github.com/Pardhu0547s/wifi-hotspot-router',
+        const repositoryRow = new Adw.ActionRow({title: 'GitHub Repository'});
+        repositoryRow.add_suffix(new Gtk.LinkButton({
+            label: 'Open on GitHub',
+            uri: this.metadata.url,
             valign: Gtk.Align.CENTER,
+        }));
+        aboutGroup.add(repositoryRow);
+
+        validateForm();
+    }
+
+    _createWarningIcon(tooltip) {
+        const icon = new Gtk.Image({
+            iconName: 'dialog-warning-symbolic',
+            visible: false,
+            tooltipText: tooltip,
         });
-        supportRow.add_suffix(starButton);
-        supportGroup.add(supportRow);
-
-        let passInitValid = /^[\x20-\x7E]{8,63}$/.test(config.password) && !/[\\"$`\r\n]/.test(config.password);
-        passWarning.visible = !passInitValid;
+        icon.add_css_class('error');
+        return icon;
     }
 
-    _generateRandomPassword() {
+    _restartService() {
+        const unitName = `wifi-hotspot@${GLib.get_user_name()}.service`;
         try {
-            return GLib.uuid_string_random().replace(/-/g, '').substring(0, 12);
+            Gio.Subprocess.new(['systemctl', 'try-restart', unitName], Gio.SubprocessFlags.NONE);
         } catch (e) {
-            return 'hotspot' + Math.floor(Math.random() * 8999 + 1000);
-        }
-    }
-
-    _loadSavedConfig(settings = null) {
-        let config = {
-            ssid: 'hotspot',
-            password: this._generateRandomPassword(),
-            band: 'bg',
-        };
-
-        if (settings) {
-            try {
-                config.ssid = settings.get_string('hotspot-ssid') || config.ssid;
-                config.band = settings.get_string('hotspot-band') || config.band;
-            } catch (e) { }
-        }
-
-        let path = GLib.get_user_config_dir() + '/wifi-hotspot.conf';
-        if (GLib.file_test(path, GLib.FileTest.EXISTS)) {
-            try {
-                let [success, content] = GLib.file_get_contents(path);
-                if (success) {
-                    let lines = new TextDecoder('utf-8').decode(content).split('\n');
-                    for (let line of lines) {
-                        let match = line.match(/^(\w+)\s*=\s*"(.*)"$/);
-                        if (match) {
-                            let [, key, val] = match;
-                            switch (key) {
-                                case 'SSID': config.ssid = val; break;
-                                case 'PASSWORD': if (val) config.password = val; break;
-                                case 'BAND': config.band = val; break;
-                            }
-                        }
-                    }
-                }
-            } catch (e) { }
-        } else {
-            this._saveConfig(config.ssid, config.password, config.band);
-        }
-        return config;
-    }
-
-    _saveConfig(ssid, password, band) {
-        let configDir = GLib.get_user_config_dir();
-        let path = configDir + '/wifi-hotspot.conf';
-        let output = `SSID="${ssid}"
-PASSWORD="${password}"
-BAND="${band}"
-`;
-        try {
-            GLib.mkdir_with_parents(configDir, 448);
-            GLib.file_set_contents(path, output);
-            GLib.chmod(path, 384);
-            return true;
-        } catch (e) {
-            console.error('[HotspotRouter] Failed saving config: ' + e.message);
-            return false;
+            console.error(`Could not restart ${unitName}: ${e.message}`);
         }
     }
 }
